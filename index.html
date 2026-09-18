@@ -322,7 +322,7 @@ const orderRows=()=>CODES.filter(a=>a.cls.bought&&!a.stockHeld&&!a.freetext&&!a.
 const b2bRows=()=>CODES.filter(a=>a.cls.bought&&!a.freetext&&!a.transfer&&a.b2bMiss.length>0);
 const coveredRows=()=>CODES.filter(a=>a.cls.bought&&!a.stockHeld&&!a.freetext&&!a.transfer&&a.soOut>0&&a.need<=0);
 const heldRows=()=>CODES.filter(a=>a.cls.bought&&a.stockHeld&&!a.transfer);
-const transferRows=()=>CODES.filter(a=>a.transfer&&(a.so.length||a.po.length));
+const transferRows=()=>CODES.filter(a=>a.transfer&&a.need>0);   // ID codes short of stock + PO; covered ones are left out
 const dismissedRows=()=>Object.keys(DISMISSED).map(key=>{const d=DISMISSED[key];const a=CODES.find(c=>c.co+'|'+c.code===key);return {key,d,a}});
 
 /* ── render ────────────────────────────────────────────────────────────── */
@@ -497,19 +497,19 @@ function renderTransfers(){
   let rows=transferRows().filter(vis);
   const all=rows;
   const t=[
-    {id:'',v:all.length,l:'Transfer codes on order'},
-    {id:'short',v:all.filter(a=>a.need>0).length,l:'Demand exceeds stock + PO',cls:'red'},
-    {id:'so',v:all.filter(a=>a.so.length).length,l:'On a sales order',cls:'steel'},
-    {id:'po',v:all.filter(a=>a.po.length).length,l:'On a purchase order',cls:'steel'}
+    {id:'',v:all.length,l:'Transfer codes short',cls:'red'},
+    {id:'',v:fmt(all.reduce((x,a)=>x+a.need,0)),l:'Units short'},
+    {id:'overdue',v:all.filter(a=>a.urg==='overdue').length,l:'Promised date passed',cls:'red'},
+    {id:'urgent',v:all.filter(a=>a.urg==='urgent').length,l:'Order today',cls:'red'},
+    {id:'po',v:all.filter(a=>a.poOut>0).length,l:'Partly on a PO',cls:'steel'}
   ];
-  if(UI.tile==='short')rows=rows.filter(a=>a.need>0);
-  if(UI.tile==='so')rows=rows.filter(a=>a.so.length);
-  if(UI.tile==='po')rows=rows.filter(a=>a.po.length);
+  if(UI.tile==='po')rows=rows.filter(a=>a.poOut>0);
+  else if(UI.tile)rows=rows.filter(a=>a.urg===UI.tile);
   sortBy(rows,{key:'due',get:SORTS.due.get,dir:1});
   document.getElementById('rc').textContent=`${rows.length} code${rows.length===1?'':'s'}`;
-  document.getElementById('view').innerHTML=tiles(t)+`<div class="card"><h2>Transfers <span class="r">codes starting ID – intercompany transfers, kept off the ordering tabs</span></h2>
+  document.getElementById('view').innerHTML=tiles(t)+`<div class="card"><h2>Transfers <span class="r">codes starting ID – transfers where sales demand is not covered by free stock or a purchase order</span></h2>
     <div class="tw"><table><thead><tr>${th('Co','co')}${th('Code','code')}${th('Supplier','sup')}${th('In stock','inStock','num')}${th('Free','free','num')}${th('SO out','soOut','num')}${th('On PO','poOut','num')}${th('Need','need','num')}${th('Promised','due')}<th>Status</th></tr></thead>
-    <tbody>${rows.length?rowsHtml(rows,a=>`<td>${coTag(a.co)}</td>${codeCell(a)}<td class="sm">${esc(a.stk.supName||'')}</td><td class="num">${fmt(a.stk.inStock)}</td><td class="num">${fmt(a.free)}</td><td class="num">${fmt(a.soOut)}${a.soOutHold?`<div class="sm">+${fmt(a.soOutHold)} held</div>`:''}</td><td class="num">${fmt(a.poOut)}${a.poOutHold?`<div class="sm">+${fmt(a.poOutHold)} held</div>`:''}</td><td class="num ${a.need>0?'need':''}">${a.need>0?`<b>${fmt(a.need)}</b>`:fmt(a.need)}</td><td>${fd(a.due)}</td><td>${a.need>0?urgPill(a):'<span class="pill p-green">Covered</span>'}</td>`):`<tr><td colspan="10"><div class="empty"><b>No transfer codes</b>No codes starting ID are on a sales or purchase order.</div></td></tr>`}</tbody></table></div></div>`;
+    <tbody>${rows.length?rowsHtml(rows,a=>`<td>${coTag(a.co)}</td>${codeCell(a)}<td class="sm">${esc(a.stk.supName||'')}</td><td class="num">${fmt(a.stk.inStock)}</td><td class="num">${fmt(a.free)}</td><td class="num">${fmt(a.soOut)}${a.soOutHold?`<div class="sm">+${fmt(a.soOutHold)} held</div>`:''}</td><td class="num">${fmt(a.poOut)}${a.poOutHold?`<div class="sm">+${fmt(a.poOutHold)} held</div>`:''}</td><td class="num need"><b>${fmt(a.need)}</b></td><td>${fd(a.due)}</td><td>${urgPill(a)}</td>`):`<tr><td colspan="10"><div class="empty"><b>No transfers short</b>Every ID code on a sales order is covered by free stock or a purchase order.</div></td></tr>`}</tbody></table></div></div>`;
 }
 
 /* Dismissed */
