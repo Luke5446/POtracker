@@ -70,7 +70,6 @@ td .code{font-family:Consolas,monospace;font-weight:700;color:var(--navy);font-s
 td .desc{font-size:12px;color:var(--mut);margin-top:2px;max-width:360px}
 td .sm{font-size:11.5px;color:var(--mut)}
 td.need b{color:var(--red);font-size:14px}
-tr.raised td{opacity:.55} tr.raised td .code{color:var(--mut)}
 .pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:12px;white-space:nowrap}
 .p-red{background:var(--red-bg);color:#b91c1c} .p-amber{background:var(--amber-bg);color:#92400e}
 .p-green{background:var(--green-bg);color:#065f46} .p-blue{background:var(--blue-bg);color:#1e40af}
@@ -82,7 +81,9 @@ tr.det td{background:#f8fafd;padding:10px 14px 14px 34px;cursor:default}
 @media (max-width:900px){.det-grid{grid-template-columns:1fr}}
 .det h4{font-size:12px;color:var(--navy);margin-bottom:6px}
 .det table{font-size:12px} .det th{font-size:10.5px;padding:5px 8px;cursor:default} .det td{padding:5px 8px}
-.chk{width:16px;height:16px;cursor:pointer;accent-color:var(--navy)}
+.cp{border:1px solid var(--line);background:#fff;border-radius:4px;cursor:pointer;font-size:11px;padding:1px 5px;margin-left:6px;color:var(--mut);vertical-align:middle;line-height:1.3;font-family:inherit}
+.cp:hover{color:var(--navy);border-color:var(--steel)} .cp.ok{color:var(--green);border-color:var(--green)}
+td .code{display:inline-block}
 .empty{padding:34px 16px;text-align:center;color:var(--mut);font-size:13.5px}
 .empty b{display:block;color:var(--navy);font-size:15px;margin-bottom:6px}
 .legend{font-size:12px;color:var(--mut);margin:10px 2px 0;display:flex;gap:14px;flex-wrap:wrap}
@@ -129,6 +130,8 @@ textarea{width:100%;min-height:150px;font-size:11px;font-family:Consolas,monospa
   <button data-t="b2b">Back-to-back check<span class="n" id="n-b2b">0</span></button>
   <button data-t="covered">Covered<span class="n" id="n-covered">0</span></button>
   <button data-t="held">Stock held<span class="n" id="n-held">0</span></button>
+  <button data-t="transfers">Transfers<span class="n" id="n-transfers">0</span></button>
+  <button data-t="dismissed">Dismissed<span class="n" id="n-dismissed">0</span></button>
   <button data-t="review">Review<span class="n" id="n-review">0</span></button>
 </nav>
 
@@ -151,9 +154,8 @@ textarea{width:100%;min-height:150px;font-size:11px;font-family:Consolas,monospa
   <div class="md">
     <h3>Paste today's data <button class="x" onclick="closeOv('pasteOv')" aria-label="Close">×</button></h3>
     <div class="body">
-      <p>Refresh the <b>PO_Tracker</b> Excel query, select <b>columns A to AB</b> for every row (the header row is fine either way), copy, and paste below. Loading replaces yesterday's data; nothing else is kept between days except your <b>Raised</b> ticks and settings.</p>
+      <p>Refresh the <b>PO_Tracker</b> Excel query, select <b>columns A to AC</b> for every row (the header row is fine either way), copy, and paste below. Loading replaces yesterday's data; nothing else is kept between days except your <b>Dismissed</b> list and settings.</p>
       <textarea id="pasteTa" placeholder="Paste here…" spellcheck="false"></textarea>
-      <p style="margin-top:8px">Or load a tab-separated text file: <input type="file" id="pasteFile" accept=".txt,.tsv,.csv"></p>
     </div>
     <div class="foot">
       <button class="btn btn-navy" onclick="loadPaste()">Load data</button>
@@ -192,19 +194,20 @@ textarea{width:100%;min-height:150px;font-size:11px;font-family:Consolas,monospa
 <script>
 /* ═══════════════════════════════════════════════════════════════════════
    POtracker — data model
-   One daily paste from the POtracker_live.sql query (columns A–AB).
+   One daily paste from the POtracker_live.sql query (columns A–AC;
+   AC = date the order was added to Sage, shown on the drill-down).
    Three row types share a layout: SO (sales order lines), PO (purchase
    order lines), STK (one per code per company: classification + stock).
    Netting per code, per company:
      need = (SO outstanding − SO allocated) − free stock − PO outstanding
    ═══════════════════════════════════════════════════════════════════════ */
-const LS_RAW='potracker_raw', LS_TS='potracker_ts', LS_SET='potracker_settings', LS_RAISED='potracker_raised';
+const LS_RAW='potracker_raw', LS_TS='potracker_ts', LS_SET='potracker_settings', LS_DISMISSED='potracker_dismissed';
 const DEF_SET={
   made:['Tibard','Oliver Harvey','Clockwork','Clockwork Clothing','Clockwork Giant Clothing'],
   groups:['54'], holdSO:false, soon:7, lead:5
 };
 let SET=loadSettings();
-let RAISED=lsGet(LS_RAISED,{});
+let DISMISSED=lsGet(LS_DISMISSED,{});      // key co|code → {at, code, name, sup, need}
 let DATA={so:[],po:[],stk:[],ts:null};      // parsed rows
 let CODES=[];                               // aggregated per company+code
 let UI={tab:'order',co:'',q:'',sup:'',tile:'',open:{},sort:{}};
@@ -234,7 +237,7 @@ function parseRaw(txt){
     if(!/^(SO|PO|STK)$/.test(c[0])||c.length<20){bad++;return}
     const base={key:c[2],co:c[1],code:c[3].toUpperCase(),desc:c[4],doc:c[5],seq:num(c[6]),acct:c[7],acctName:c[8],ref:c[9],
       date:c[10]||'',q1:num(c[11]),q2:num(c[12]),q3:num(c[13]),q4:c[14]===''?null:num(c[14]),fulfil:c[15],link:c[16]||'',b2bN:num(c[17]),
-      ic:c[18]==='Y',status:c[27]||'0'};
+      ic:c[18]==='Y',status:c[27]||'0',added:c[28]||''};
     if(c[0]==='SO') so.push(Object.assign(base,{out:base.q3,alloc:base.q4||0,hold:base.status==='1'}));
     else if(c[0]==='PO') po.push(Object.assign(base,{out:base.q3,hold:base.status==='1'}));
     else stk.push({key:c[2],co:c[1],code:c[3].toUpperCase(),name:c[4],supNo:c[7],supName:c[8],supCode:c[9],
@@ -260,7 +263,7 @@ function build(){
   const t=today();
   CODES=[...map.values()].map(a=>{
     const s=a.stk, cl=classify(s);
-    a.cls=cl; a.stockHeld=!!s.stockHeld; a.freetext=a.code==='FREETEXT';
+    a.cls=cl; a.stockHeld=!!s.stockHeld; a.freetext=a.code==='FREETEXT'; a.transfer=/^ID/.test(a.code);
     a.soLive=a.so.filter(l=>!l.hold), a.soHold=a.so.filter(l=>l.hold);
     a.poLive=a.po.filter(l=>!l.hold), a.poHold=a.po.filter(l=>l.hold);
     const demandLines=SET.holdSO?a.so:a.soLive;
@@ -284,14 +287,10 @@ function build(){
     a.poDates=a.poLive.filter(l=>l.out>0).map(l=>pd(l.date));
     a.poLate=a.poDates.length>0&&a.due&&a.poDates.some(d=>!d||d>a.due);
     a.poNoDate=a.poLive.some(l=>l.out>0&&!l.date);
-    a.raised=RAISED[a.co+'|'+a.code]||null;
+    a.dismissed=DISMISSED[a.co+'|'+a.code]||null;
     a.hay=(a.code+' '+(s.name||'')+' '+(s.supName||'')+' '+(s.mfr||'')+' '+a.so.map(l=>l.doc+' '+l.acctName+' '+l.ref).join(' ')+' '+a.po.map(l=>l.doc+' '+l.acctName).join(' ')).toLowerCase();
     return a;
   });
-  // drop stale Raised ticks: code no longer needs ordering
-  let changed=false;
-  Object.keys(RAISED).forEach(key=>{const a=CODES.find(c=>c.co+'|'+c.code===key);if(!a||!(a.cls.bought&&!a.stockHeld&&a.need>0)){delete RAISED[key];changed=true}});
-  if(changed)lsSet(LS_RAISED,RAISED);
   fillSuppliers();
 }
 function fillSuppliers(){
@@ -307,10 +306,12 @@ function vis(a){
   if(UI.q&&!a.hay.includes(UI.q))return false;
   return true;
 }
-const orderRows=()=>CODES.filter(a=>a.cls.bought&&!a.stockHeld&&!a.freetext&&a.need>0);
-const b2bRows=()=>CODES.filter(a=>a.cls.bought&&!a.freetext&&a.b2bMiss.length>0);
-const coveredRows=()=>CODES.filter(a=>a.cls.bought&&!a.stockHeld&&!a.freetext&&a.soOut>0&&a.need<=0);
-const heldRows=()=>CODES.filter(a=>a.cls.bought&&a.stockHeld);
+const orderRows=()=>CODES.filter(a=>a.cls.bought&&!a.stockHeld&&!a.freetext&&!a.transfer&&a.need>0&&!a.dismissed);
+const b2bRows=()=>CODES.filter(a=>a.cls.bought&&!a.freetext&&!a.transfer&&a.b2bMiss.length>0);
+const coveredRows=()=>CODES.filter(a=>a.cls.bought&&!a.stockHeld&&!a.freetext&&!a.transfer&&a.soOut>0&&a.need<=0);
+const heldRows=()=>CODES.filter(a=>a.cls.bought&&a.stockHeld&&!a.transfer);
+const transferRows=()=>CODES.filter(a=>a.transfer&&(a.so.length||a.po.length));
+const dismissedRows=()=>Object.keys(DISMISSED).map(key=>{const d=DISMISSED[key];const a=CODES.find(c=>c.co+'|'+c.code===key);return {key,d,a}});
 
 /* ── render ────────────────────────────────────────────────────────────── */
 function render(){
@@ -319,10 +320,12 @@ function render(){
   document.getElementById('n-b2b').textContent=b2bRows().reduce((x,a)=>x+a.b2bMiss.length,0);
   document.getElementById('n-covered').textContent=coveredRows().length;
   document.getElementById('n-held').textContent=heldRows().filter(a=>a.need>0).length;
+  document.getElementById('n-transfers').textContent=transferRows().length;
+  document.getElementById('n-dismissed').textContent=Object.keys(DISMISSED).length;
   document.getElementById('n-review').textContent=reviewCount();
   const v=document.getElementById('view');
-  if(!DATA.so.length&&!DATA.stk.length){v.innerHTML=`<div class="card"><div class="empty"><b>No data yet</b>Refresh the PO_Tracker Excel query, copy columns A to AB, then use <i>Paste today's data</i>.</div></div>`;document.getElementById('rc').textContent='';return}
-  ({order:renderOrder,b2b:renderB2B,covered:renderCovered,held:renderHeld,review:renderReview})[UI.tab]();
+  if(!DATA.so.length&&!DATA.stk.length){v.innerHTML=`<div class="card"><div class="empty"><b>No data yet</b>Refresh the PO_Tracker Excel query, copy columns A to AC, then use <i>Paste today's data</i>.</div></div>`;document.getElementById('rc').textContent='';return}
+  ({order:renderOrder,b2b:renderB2B,covered:renderCovered,held:renderHeld,transfers:renderTransfers,dismissed:renderDismissed,review:renderReview})[UI.tab]();
   const ts=DATA.ts?new Date(DATA.ts):null;
   document.getElementById('hdrStatus').innerHTML=`Data loaded <b>${ts?ts.toLocaleDateString('en-GB',{weekday:'short',day:'2-digit',month:'short'})+' '+ts.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'–'}</b><br>${DATA.so.length} SO lines · ${DATA.po.length} PO lines · ${DATA.stk.length} codes`;
 }
@@ -359,8 +362,8 @@ function urgPill(a){
 }
 function toggleOpen(key){UI.open[key]=!UI.open[key];render()}
 function detail(a){
-  const soT=a.so.length?`<table><thead><tr><th>SO</th><th>Customer</th><th>Ref</th><th class="num">Out</th><th class="num">Alloc</th><th>Promised</th><th>B2B PO</th><th></th></tr></thead><tbody>${a.so.sort((x,y)=>(x.date||'9').localeCompare(y.date||'9')).map(l=>`<tr><td><span class="code">${esc(l.doc)}</span></td><td>${esc(l.acctName)}${l.ic?' <span class="pill p-gold">Intercompany</span>':''}</td><td class="sm">${esc(l.ref)}</td><td class="num">${fmt(l.out)}</td><td class="num">${fmt(l.alloc)}</td><td>${fdl(pd(l.date))}</td><td>${l.link?`<span class="code">${esc(l.link)}</span>${l.b2bN>1?` <span class="sm">+${l.b2bN-1}</span>`:''}`:((a.stk.b2bHist||0)>0?'<span class="pill p-amber">Not generated</span>':'<span class="sm">–</span>')}</td><td>${l.hold?'<span class="pill p-grey">On hold</span>':''}</td></tr>`).join('')}</tbody></table>`:'<div class="sm" style="color:var(--mut)">No live sales order lines.</div>';
-  const poT=a.po.length?`<table><thead><tr><th>PO</th><th>Supplier</th><th class="num">Ordered</th><th class="num">Received</th><th class="num">Out</th><th>Expected</th><th>From SO</th><th></th></tr></thead><tbody>${a.po.map(l=>`<tr><td><span class="code">${esc(l.doc)}</span></td><td>${esc(l.acctName)}${l.ic?' <span class="pill p-gold">Intercompany</span>':''}</td><td class="num">${fmt(l.q1)}</td><td class="num">${fmt(l.q2)}</td><td class="num">${fmt(l.out)}</td><td>${l.date?fdl(pd(l.date)):'<span class="pill p-grey">No date</span>'}</td><td>${l.link?`<span class="code">${esc(l.link)}</span>`:'<span class="sm">–</span>'}</td><td>${l.hold?'<span class="pill p-amber">On hold</span>':''}</td></tr>`).join('')}</tbody></table>`:'<div class="sm" style="color:var(--mut)">No purchase order lines.</div>';
+  const soT=a.so.length?`<table><thead><tr><th>SO</th><th>Customer</th><th>Ref</th><th class="num">Out</th><th class="num">Alloc</th><th>Ordered</th><th>Promised</th><th>B2B PO</th><th></th></tr></thead><tbody>${a.so.sort((x,y)=>(x.date||'9').localeCompare(y.date||'9')).map(l=>`<tr><td><span class="code">${esc(l.doc)}</span></td><td>${esc(l.acctName)}${l.ic?' <span class="pill p-gold">Intercompany</span>':''}</td><td class="sm">${esc(l.ref)}</td><td class="num">${fmt(l.out)}</td><td class="num">${fmt(l.alloc)}</td><td>${fdl(pd(l.added))}</td><td>${fdl(pd(l.date))}</td><td>${l.link?`<span class="code">${esc(l.link)}</span>${l.b2bN>1?` <span class="sm">+${l.b2bN-1}</span>`:''}`:((a.stk.b2bHist||0)>0?'<span class="pill p-amber">Not generated</span>':'<span class="sm">–</span>')}</td><td>${l.hold?'<span class="pill p-grey">On hold</span>':''}</td></tr>`).join('')}</tbody></table>`:'<div class="sm" style="color:var(--mut)">No live sales order lines.</div>';
+  const poT=a.po.length?`<table><thead><tr><th>PO</th><th>Supplier</th><th class="num">Ordered</th><th class="num">Received</th><th class="num">Out</th><th>Ordered</th><th>Expected</th><th>From SO</th><th></th></tr></thead><tbody>${a.po.map(l=>`<tr><td><span class="code">${esc(l.doc)}</span></td><td>${esc(l.acctName)}${l.ic?' <span class="pill p-gold">Intercompany</span>':''}</td><td class="num">${fmt(l.q1)}</td><td class="num">${fmt(l.q2)}</td><td class="num">${fmt(l.out)}</td><td>${fdl(pd(l.added))}</td><td>${l.date?fdl(pd(l.date)):'<span class="pill p-grey">No date</span>'}</td><td>${l.link?`<span class="code">${esc(l.link)}</span>`:'<span class="sm">–</span>'}</td><td>${l.hold?'<span class="pill p-amber">On hold</span>':''}</td></tr>`).join('')}</tbody></table>`:'<div class="sm" style="color:var(--mut)">No purchase order lines.</div>';
   const s=a.stk;
   return `<tr class="det"><td colspan="20"><div class="det">
     <div class="sm" style="margin-bottom:8px">${esc(s.name||'')} · Manufacturer <b>${esc(s.mfr||'(blank)')}</b> · Preferred supplier <b>${esc(s.supName||'none set')}</b>${s.supCode?` (${esc(s.supCode)})`:''} · Lead ${a.lead}d${s.lead==null||s.lead===0?' (default)':''} · MOQ ${fmt(s.moq||0)} · Group ${esc(s.grp||'–')} · Back-to-back POs last 12m: <b>${s.b2bHist||0}</b><br>
@@ -370,36 +373,49 @@ function detail(a){
 }
 function rowsHtml(rows,cols){
   return rows.map(a=>{const key=a.co+'|'+a.code;const open=UI.open[key];
-    return `<tr class="row ${open?'open':''} ${a.raised?'raised':''}" onclick="toggleOpen('${esc(key)}')">${cols(a)}</tr>${open?detail(a):''}`}).join('');
+    return `<tr class="row ${open?'open':''}" onclick="toggleOpen('${esc(key)}')">${cols(a)}</tr>${open?detail(a):''}`}).join('');
 }
-function codeCell(a){return `<td><span class="code">${esc(a.code)}</span><div class="desc">${esc(a.stk.name||'')}</div></td>`}
+function copyBtn(code){return `<button class="cp" type="button" title="Copy code" onclick="event.stopPropagation();copyCode(this,'${esc(code)}')">⧉</button>`}
+function codeCell(a){return `<td><span class="code">${esc(a.code)}</span>${copyBtn(a.code)}<div class="desc">${esc(a.stk.name||'')}</div></td>`}
+function copyCode(btn,code){
+  const done=()=>{btn.textContent='✓';btn.classList.add('ok');setTimeout(()=>{btn.textContent='⧉';btn.classList.remove('ok')},1200)};
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(code).then(done,()=>fallbackCopy(code,done))}else fallbackCopy(code,done);
+}
+function fallbackCopy(text,done){const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();try{document.execCommand('copy');done()}catch(e){}ta.remove()}
 
 /* Needs ordering */
 function renderOrder(){
   let rows=orderRows().filter(vis);
   const all=rows;
+  const popHold=CODES.filter(a=>a.cls.bought&&!a.freetext&&!a.transfer&&a.poHold.length).filter(vis);
+  const sopHold=CODES.filter(a=>a.cls.bought&&!a.freetext&&!a.transfer&&a.soHold.length).filter(vis);
   const t=[
     {id:'',v:all.length,l:'Codes to order'},
     {id:'',v:fmt(all.reduce((x,a)=>x+Math.max(0,a.need),0)),l:'Units short'},
     {id:'overdue',v:all.filter(a=>a.urg==='overdue').length,l:'Promised date passed',cls:'red'},
     {id:'urgent',v:all.filter(a=>a.urg==='urgent').length,l:'Order today',cls:'red'},
     {id:'soon',v:all.filter(a=>a.urg==='soon').length,l:`Order within ${SET.soon} days`,cls:'amber'},
-    {id:'hold',v:all.filter(a=>a.poOutHold>0).length,l:'PO exists but on hold',cls:'steel'},
-    {id:'raised',v:all.filter(a=>a.raised).length,l:'Ticked as raised',cls:'green'}
+    {id:'pop',v:popHold.length,l:'POP on hold',cls:'steel'},
+    {id:'sop',v:sopHold.length,l:'SOP on hold',cls:'steel'}
   ];
-  if(UI.tile==='hold')rows=rows.filter(a=>a.poOutHold>0);
-  else if(UI.tile==='raised')rows=rows.filter(a=>a.raised);
+  if(UI.tile==='pop')rows=popHold;
+  else if(UI.tile==='sop')rows=sopHold;
   else if(UI.tile)rows=rows.filter(a=>a.urg===UI.tile);
-  const s=sortBy(rows,{key:'orderBy',get:SORTS.orderBy.get,dir:1});
-  rows.sort((a,b)=>(a.raised?1:0)-(b.raised?1:0)||0);
+  sortBy(rows,{key:'orderBy',get:SORTS.orderBy.get,dir:1});
   document.getElementById('rc').textContent=`${rows.length} code${rows.length===1?'':'s'}`;
-  document.getElementById('view').innerHTML=tiles(t)+`<div class="card"><h2>Needs ordering <span class="r">bought-in, not stock held, sales demand not covered by free stock or a purchase order</span>
-    <button class="btn btn-line btn-sm" style="margin-left:12px" onclick="event.stopPropagation();exportCsv()">Export order list (CSV)</button></h2>
-    <div class="tw"><table><thead><tr><th></th>${th('Co','co')}${th('Code','code')}${th('Supplier','sup')}${th('Manufacturer','mfr')}${th('SO out','soOut','num')}${th('Free','free','num')}${th('On PO','poOut','num')}${th('Need','need','num')}<th class="num">MOQ</th>${th('Lead','lead','num')}${th('Promised','due')}${th('Order by','orderBy')}<th>Status</th><th>Raised</th></tr></thead>
-    <tbody>${rows.length?rowsHtml(rows,a=>`<td>${a.b2bMiss.length?'<span class="pill p-amber" title="Item is normally back-to-back but no PO was generated">B2B</span>':''}</td><td>${coTag(a.co)}</td>${codeCell(a)}<td>${esc(a.stk.supName||'')}<div class="sm">${esc(a.stk.supNo||'')}</div></td><td class="sm">${esc(a.stk.mfr||'')||'<span class="pill p-grey">blank</span>'}</td><td class="num">${fmt(a.soOut)}${a.soAlloc?`<div class="sm">${fmt(a.soAlloc)} alloc</div>`:''}</td><td class="num">${fmt(a.free)}</td><td class="num">${fmt(a.poOut)}${a.poOutHold?`<div class="sm">+${fmt(a.poOutHold)} held</div>`:''}</td><td class="num need"><b>${fmt(a.need)}</b>${a.stk.moq>a.need?`<div class="sm">MOQ ${fmt(a.stk.moq)}</div>`:''}</td><td class="num">${a.stk.moq?fmt(a.stk.moq):'–'}</td><td class="num">${a.lead}d</td><td>${fd(a.due)}</td><td>${fd(a.orderBy)}</td><td>${a.poOutHold>=a.need&&a.poOutHold>0?'<span class="pill p-blue">Covered if PO released</span>':urgPill(a)}</td><td onclick="event.stopPropagation()"><input type="checkbox" class="chk" ${a.raised?'checked':''} onchange="toggleRaised('${esc(a.co+'|'+a.code)}',this.checked)" title="${a.raised?'Ticked '+fdl(new Date(a.raised)):'Tick when the PO has been raised'}"></td>`):`<tr><td colspan="15"><div class="empty"><b>Nothing to order</b>Every bought-in, non-stock sales line is covered by free stock or a purchase order.</div></td></tr>`}</tbody></table></div></div>
-    <div class="legend"><span>Need = (SO outstanding − allocated) − free stock − PO outstanding.</span><span>Order by = earliest promised date − supplier lead time.</span><span>Ticks clear themselves once the PO appears in a later paste.</span></div>`;
+  const title=UI.tile==='pop'?'Purchase orders on hold <span class="r">bought-in codes with a PO line on hold – it will not arrive until released</span>':UI.tile==='sop'?'Sales orders on hold <span class="r">bought-in codes with a held sales order line – not counted as demand unless switched on in Settings</span>':'Needs ordering <span class="r">bought-in, not stock held, sales demand not covered by free stock or a purchase order</span>';
+  document.getElementById('view').innerHTML=tiles(t)+`<div class="card"><h2>${title}</h2>
+    <div class="tw"><table><thead><tr><th></th>${th('Co','co')}${th('Code','code')}${th('Supplier','sup')}${th('Manufacturer','mfr')}${th('SO out','soOut','num')}${th('Free','free','num')}${th('On PO','poOut','num')}${th('Need','need','num')}<th class="num">MOQ</th>${th('Lead','lead','num')}${th('Promised','due')}${th('Order by','orderBy')}<th>Status</th><th></th></tr></thead>
+    <tbody>${rows.length?rowsHtml(rows,a=>`<td>${a.b2bMiss.length?'<span class="pill p-amber" title="Item is normally back-to-back but no PO was generated">B2B</span>':''}</td><td>${coTag(a.co)}</td>${codeCell(a)}<td>${esc(a.stk.supName||'')}<div class="sm">${esc(a.stk.supNo||'')}</div></td><td class="sm">${esc(a.stk.mfr||'')||'<span class="pill p-grey">blank</span>'}</td><td class="num">${fmt(a.soOut)}${a.soAlloc?`<div class="sm">${fmt(a.soAlloc)} alloc</div>`:''}</td><td class="num">${fmt(a.free)}</td><td class="num">${fmt(a.poOut)}${a.poOutHold?`<div class="sm">+${fmt(a.poOutHold)} held</div>`:''}</td><td class="num need"><b>${fmt(a.need)}</b>${a.stk.moq>a.need?`<div class="sm">MOQ ${fmt(a.stk.moq)}</div>`:''}</td><td class="num">${a.stk.moq?fmt(a.stk.moq):'–'}</td><td class="num">${a.lead}d</td><td>${fd(a.due)}</td><td>${fd(a.orderBy)}</td><td>${a.poOutHold>=a.need&&a.poOutHold>0?'<span class="pill p-blue">Covered if PO released</span>':urgPill(a)}</td><td>${a.dismissed?'<span class="pill p-grey">Dismissed</span>':`<button class="btn btn-line btn-sm" onclick="event.stopPropagation();dismiss('${esc(a.co+'|'+a.code)}')" title="Hide this code from Needs ordering, including on future pastes, until undone">Dismiss</button>`}</td>`):`<tr><td colspan="15"><div class="empty"><b>Nothing to order</b>Every bought-in, non-stock sales line is covered by free stock or a purchase order.</div></td></tr>`}</tbody></table></div></div>
+    <div class="legend"><span>Need = (SO outstanding − allocated) − free stock − PO outstanding.</span><span>Order by = earliest promised date − supplier lead time.</span><span>Dismissed codes stay hidden on future pastes until undone from the Dismissed tab.</span></div>`;
 }
-function toggleRaised(key,on){if(on)RAISED[key]=new Date().toISOString();else delete RAISED[key];lsSet(LS_RAISED,RAISED);build();render()}
+function dismiss(key){
+  const a=CODES.find(c=>c.co+'|'+c.code===key);if(!a)return;
+  DISMISSED[key]={at:new Date().toISOString(),co:a.co,code:a.code,name:a.stk.name||'',sup:a.stk.supName||'',need:a.need};
+  lsSet(LS_DISMISSED,DISMISSED);build();render();
+}
+function undismiss(key){delete DISMISSED[key];lsSet(LS_DISMISSED,DISMISSED);build();render()}
+function clearDismissedDone(){Object.keys(DISMISSED).forEach(key=>{const a=CODES.find(c=>c.co+'|'+c.code===key);if(!a||!(a.cls.bought&&!a.stockHeld&&a.need>0))delete DISMISSED[key]});lsSet(LS_DISMISSED,DISMISSED);build();render()}
 
 /* Back-to-back check */
 function renderB2B(){
@@ -464,9 +480,49 @@ function renderHeld(){
     <tbody>${rows.length?rowsHtml(rows,a=>`<td>${coTag(a.co)}</td>${codeCell(a)}<td class="sm">${esc(a.stk.supName||'')}</td><td class="num">${fmt(a.stk.inStock)}</td><td class="num">${fmt(a.free)}</td><td class="num">${fmt(a.soOut)}</td><td class="num">${fmt(a.poOut)}${a.poOutHold?`<div class="sm">+${fmt(a.poOutHold)} held</div>`:''}</td><td class="num ${a.need>0?'need':''}">${a.need>0?`<b>${fmt(a.need)}</b>`:fmt(a.need)}</td><td class="num">${a.lead}d</td><td>${fd(a.due)}</td><td>${a.need>0?urgPill(a):a.free<0?'<span class="pill p-amber">Negative stock</span>':'<span class="pill p-green">OK</span>'}</td>`):`<tr><td colspan="11"><div class="empty"><b>Nothing here</b></div></td></tr>`}</tbody></table></div></div>`;
 }
 
+/* Transfers (codes starting ID) */
+function renderTransfers(){
+  let rows=transferRows().filter(vis);
+  const all=rows;
+  const t=[
+    {id:'',v:all.length,l:'Transfer codes on order'},
+    {id:'short',v:all.filter(a=>a.need>0).length,l:'Demand exceeds stock + PO',cls:'red'},
+    {id:'so',v:all.filter(a=>a.so.length).length,l:'On a sales order',cls:'steel'},
+    {id:'po',v:all.filter(a=>a.po.length).length,l:'On a purchase order',cls:'steel'}
+  ];
+  if(UI.tile==='short')rows=rows.filter(a=>a.need>0);
+  if(UI.tile==='so')rows=rows.filter(a=>a.so.length);
+  if(UI.tile==='po')rows=rows.filter(a=>a.po.length);
+  sortBy(rows,{key:'due',get:SORTS.due.get,dir:1});
+  document.getElementById('rc').textContent=`${rows.length} code${rows.length===1?'':'s'}`;
+  document.getElementById('view').innerHTML=tiles(t)+`<div class="card"><h2>Transfers <span class="r">codes starting ID – intercompany transfers, kept off the ordering tabs</span></h2>
+    <div class="tw"><table><thead><tr>${th('Co','co')}${th('Code','code')}${th('Supplier','sup')}${th('In stock','inStock','num')}${th('Free','free','num')}${th('SO out','soOut','num')}${th('On PO','poOut','num')}${th('Need','need','num')}${th('Promised','due')}<th>Status</th></tr></thead>
+    <tbody>${rows.length?rowsHtml(rows,a=>`<td>${coTag(a.co)}</td>${codeCell(a)}<td class="sm">${esc(a.stk.supName||'')}</td><td class="num">${fmt(a.stk.inStock)}</td><td class="num">${fmt(a.free)}</td><td class="num">${fmt(a.soOut)}${a.soOutHold?`<div class="sm">+${fmt(a.soOutHold)} held</div>`:''}</td><td class="num">${fmt(a.poOut)}${a.poOutHold?`<div class="sm">+${fmt(a.poOutHold)} held</div>`:''}</td><td class="num ${a.need>0?'need':''}">${a.need>0?`<b>${fmt(a.need)}</b>`:fmt(a.need)}</td><td>${fd(a.due)}</td><td>${a.need>0?urgPill(a):'<span class="pill p-green">Covered</span>'}</td>`):`<tr><td colspan="10"><div class="empty"><b>No transfer codes</b>No codes starting ID are on a sales or purchase order.</div></td></tr>`}</tbody></table></div></div>`;
+}
+
+/* Dismissed */
+function renderDismissed(){
+  let rows=dismissedRows().filter(x=>!x.a||vis(x.a));
+  const all=rows;
+  const still=x=>x.a&&x.a.cls.bought&&!x.a.stockHeld&&x.a.need>0;
+  const t=[
+    {id:'',v:all.length,l:'Dismissed codes'},
+    {id:'still',v:all.filter(still).length,l:'Still short today',cls:'amber'},
+    {id:'done',v:all.filter(x=>!still(x)).length,l:'No longer need ordering',cls:'green'}
+  ];
+  if(UI.tile==='still')rows=rows.filter(still);
+  if(UI.tile==='done')rows=rows.filter(x=>!still(x));
+  rows.sort((x,y)=>(y.d.at||'').localeCompare(x.d.at||''));
+  document.getElementById('rc').textContent=`${rows.length} code${rows.length===1?'':'s'}`;
+  document.getElementById('view').innerHTML=tiles(t)+`<div class="card"><h2>Dismissed <span class="r">hidden from Needs ordering on every paste until undone</span>
+    <button class="btn btn-line btn-sm" style="margin-left:12px" onclick="event.stopPropagation();clearDismissedDone()" title="Remove dismissals for codes that no longer need ordering">Clear those no longer needed</button></h2>
+    <div class="tw"><table><thead><tr><th>Co</th><th>Code</th><th>Supplier</th><th class="num">Need when dismissed</th><th class="num">Need today</th><th>Dismissed</th><th>Status</th><th></th></tr></thead>
+    <tbody>${rows.length?rows.map(({key,d,a})=>{const open=a&&UI.open[key];return `<tr class="row ${open?'open':''}" onclick="${a?`toggleOpen('${esc(key)}')`:''}"><td>${coTag(d.co)}</td><td><span class="code">${esc(d.code)}</span>${copyBtn(d.code)}<div class="desc">${esc((a&&a.stk.name)||d.name||'')}</div></td><td class="sm">${esc((a&&a.stk.supName)||d.sup||'')}</td><td class="num">${fmt(d.need||0)}</td><td class="num">${a?fmt(a.need):'–'}</td><td>${d.at?fdl(new Date(d.at)):'–'}</td><td>${still({a})?'<span class="pill p-amber">Still short</span>':a?'<span class="pill p-green">Covered / not needed</span>':'<span class="pill p-grey">Not in today\'s data</span>'}</td><td><button class="btn btn-line btn-sm" onclick="event.stopPropagation();undismiss('${esc(key)}')">Undo</button></td></tr>${open?detail(a):''}`}).join(''):`<tr><td colspan="8"><div class="empty"><b>Nothing dismissed</b>Use the Dismiss button on Needs ordering to park a code here.</div></td></tr>`}</tbody></table></div></div>`;
+}
+
 /* Review */
 function reviewSets(){
-  const b=CODES.filter(a=>a.cls.bought);
+  const b=CODES.filter(a=>a.cls.bought&&!a.transfer);
   return {
     freetext:CODES.filter(a=>a.freetext&&a.so.length),
     missing:b.filter(a=>a.stk.missing),
@@ -502,17 +558,6 @@ function renderReview(){
     (r.missing.length?sec('Code not in stock file','on an order but no stock record in that company',f(r.missing),a=>`${base(a)}<td class="num">${fmt(a.soOut)}</td>`,'<th>Co</th><th>Code</th><th class="num">SO out</th>'):'');
 }
 
-/* ── export ────────────────────────────────────────────────────────────── */
-function exportCsv(){
-  const rows=orderRows().filter(vis).filter(a=>!a.raised);
-  rows.sort((a,b)=>(a.stk.supName||'zzz').localeCompare(b.stk.supName||'zzz')||a.code.localeCompare(b.code));
-  const q=v=>`"${String(v==null?'':v).replace(/"/g,'""')}"`;
-  const head=['Company','Preferred supplier','Supplier acct','Code','Description','Manufacturer','Need','MOQ','Suggested qty','Lead days','Earliest promised','Order by','SO numbers','Customers'];
-  const out=[head.join(',')].concat(rows.map(a=>[a.co,a.stk.supName,a.stk.supNo,a.code,a.stk.name,a.stk.mfr,fmt(a.need),fmt(a.stk.moq||0),fmt(Math.max(a.need,a.stk.moq||0)),a.lead,a.due?a.due.toISOString().slice(0,10):'',a.orderBy?a.orderBy.toISOString().slice(0,10):'',[...new Set(a.soLive.filter(l=>l.out>0).map(l=>l.doc))].join(' '),[...new Set(a.soLive.filter(l=>l.out>0).map(l=>l.acctName))].join('; ')].map(q).join(',')));
-  const blob=new Blob(['\ufeff'+out.join('\r\n')],{type:'text/csv;charset=utf-8'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`POtracker_order_list_${new Date().toISOString().slice(0,10)}.csv`;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500);
-}
-
 /* ── paste / settings ──────────────────────────────────────────────────── */
 function openPaste(){document.getElementById('pasteTa').value='';document.getElementById('pasteMsg').textContent='';document.getElementById('pasteMsg').className='msg';document.getElementById('pasteOv').classList.add('show');document.getElementById('pasteTa').focus()}
 function closeOv(id){document.getElementById(id).classList.remove('show')}
@@ -527,7 +572,6 @@ function loadPaste(){
   setTimeout(()=>closeOv('pasteOv'),900);
 }
 function applyRaw(txt,ts){const p=parseRaw(txt);DATA={so:p.so,po:p.po,stk:p.stk,ts};UI.open={};UI.tile='';build();render()}
-document.getElementById('pasteFile').addEventListener('change',e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{document.getElementById('pasteTa').value=r.result};r.readAsText(f)});
 
 function openSettings(){
   document.getElementById('sMade').value=SET.made.join('\n');
