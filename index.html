@@ -154,7 +154,7 @@ textarea{width:100%;min-height:150px;font-size:11px;font-family:Consolas,monospa
   <div class="md">
     <h3>Paste today's data <button class="x" onclick="closeOv('pasteOv')" aria-label="Close">×</button></h3>
     <div class="body">
-      <p>Refresh the <b>PO_Tracker</b> Excel query, select <b>columns A to AC</b> for every row (the header row is fine either way), copy, and paste below. Loading replaces yesterday's data; nothing else is kept between days except your <b>Dismissed</b> list and settings.</p>
+      <p>Refresh the <b>PO_Tracker</b> Excel query, select <b>columns A to AD</b> for every row (the header row is fine either way), copy, and paste below. Loading replaces yesterday's data; nothing else is kept between days except your <b>Dismissed</b> list and settings.</p>
       <textarea id="pasteTa" placeholder="Paste here…" spellcheck="false"></textarea>
     </div>
     <div class="foot">
@@ -195,7 +195,8 @@ textarea{width:100%;min-height:150px;font-size:11px;font-family:Consolas,monospa
 /* ═══════════════════════════════════════════════════════════════════════
    POtracker — data model
    One daily paste from the POtracker_live.sql query (columns A–AC;
-   AC = date the order was added to Sage, shown on the drill-down).
+   AC = date the order was added to Sage, AD = Sage user who raised it;
+   both shown on the drill-down).
    Three row types share a layout: SO (sales order lines), PO (purchase
    order lines), STK (one per code per company: classification + stock).
    Netting per code, per company:
@@ -237,7 +238,7 @@ function parseRaw(txt){
     if(!/^(SO|PO|STK)$/.test(c[0])||c.length<20){bad++;return}
     const base={key:c[2],co:c[1],code:c[3].toUpperCase(),desc:c[4],doc:c[5],seq:num(c[6]),acct:c[7],acctName:c[8],ref:c[9],
       date:c[10]||'',q1:num(c[11]),q2:num(c[12]),q3:num(c[13]),q4:c[14]===''?null:num(c[14]),fulfil:c[15],link:c[16]||'',b2bN:num(c[17]),
-      ic:c[18]==='Y',status:c[27]||'0',added:c[28]||''};
+      ic:c[18]==='Y',status:c[27]||'0',added:c[28]||'',user:c[29]||''};
     if(c[0]==='SO') so.push(Object.assign(base,{out:base.q3,alloc:base.q4||0,hold:base.status==='1'}));
     else if(c[0]==='PO') po.push(Object.assign(base,{out:base.q3,hold:base.status==='1'}));
     else stk.push({key:c[2],co:c[1],code:c[3].toUpperCase(),name:c[4],supNo:c[7],supName:c[8],supCode:c[9],
@@ -288,7 +289,7 @@ function build(){
     a.poLate=a.poDates.length>0&&a.due&&a.poDates.some(d=>!d||d>a.due);
     a.poNoDate=a.poLive.some(l=>l.out>0&&!l.date);
     a.dismissed=DISMISSED[a.co+'|'+a.code]||null;
-    a.hay=(a.code+' '+(s.name||'')+' '+(s.supName||'')+' '+(s.mfr||'')+' '+a.so.map(l=>l.doc+' '+l.acctName+' '+l.ref).join(' ')+' '+a.po.map(l=>l.doc+' '+l.acctName).join(' ')).toLowerCase();
+    a.hay=(a.code+' '+(s.name||'')+' '+(s.supName||'')+' '+(s.mfr||'')+' '+a.so.map(l=>l.doc+' '+l.acctName+' '+l.ref+' '+l.user).join(' ')+' '+a.po.map(l=>l.doc+' '+l.acctName).join(' ')).toLowerCase();
     return a;
   });
   fillSuppliers();
@@ -324,7 +325,7 @@ function render(){
   document.getElementById('n-dismissed').textContent=Object.keys(DISMISSED).length;
   document.getElementById('n-review').textContent=reviewCount();
   const v=document.getElementById('view');
-  if(!DATA.so.length&&!DATA.stk.length){v.innerHTML=`<div class="card"><div class="empty"><b>No data yet</b>Refresh the PO_Tracker Excel query, copy columns A to AC, then use <i>Paste today's data</i>.</div></div>`;document.getElementById('rc').textContent='';return}
+  if(!DATA.so.length&&!DATA.stk.length){v.innerHTML=`<div class="card"><div class="empty"><b>No data yet</b>Refresh the PO_Tracker Excel query, copy columns A to AD, then use <i>Paste today's data</i>.</div></div>`;document.getElementById('rc').textContent='';return}
   ({order:renderOrder,b2b:renderB2B,covered:renderCovered,held:renderHeld,transfers:renderTransfers,dismissed:renderDismissed,review:renderReview})[UI.tab]();
   const ts=DATA.ts?new Date(DATA.ts):null;
   document.getElementById('hdrStatus').innerHTML=`Data loaded <b>${ts?ts.toLocaleDateString('en-GB',{weekday:'short',day:'2-digit',month:'short'})+' '+ts.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'–'}</b><br>${DATA.so.length} SO lines · ${DATA.po.length} PO lines · ${DATA.stk.length} codes`;
@@ -362,8 +363,8 @@ function urgPill(a){
 }
 function toggleOpen(key){UI.open[key]=!UI.open[key];render()}
 function detail(a){
-  const soT=a.so.length?`<table><thead><tr><th>SO</th><th>Customer</th><th>Ref</th><th class="num">Out</th><th class="num">Alloc</th><th>Ordered</th><th>Promised</th><th>B2B PO</th><th></th></tr></thead><tbody>${a.so.sort((x,y)=>(x.date||'9').localeCompare(y.date||'9')).map(l=>`<tr><td><span class="code">${esc(l.doc)}</span></td><td>${esc(l.acctName)}${l.ic?' <span class="pill p-gold">Intercompany</span>':''}</td><td class="sm">${esc(l.ref)}</td><td class="num">${fmt(l.out)}</td><td class="num">${fmt(l.alloc)}</td><td>${fdl(pd(l.added))}</td><td>${fdl(pd(l.date))}</td><td>${l.link?`<span class="code">${esc(l.link)}</span>${l.b2bN>1?` <span class="sm">+${l.b2bN-1}</span>`:''}`:((a.stk.b2bHist||0)>0?'<span class="pill p-amber">Not generated</span>':'<span class="sm">–</span>')}</td><td>${l.hold?'<span class="pill p-grey">On hold</span>':''}</td></tr>`).join('')}</tbody></table>`:'<div class="sm" style="color:var(--mut)">No live sales order lines.</div>';
-  const poT=a.po.length?`<table><thead><tr><th>PO</th><th>Supplier</th><th class="num">Ordered</th><th class="num">Received</th><th class="num">Out</th><th>Ordered</th><th>Expected</th><th>From SO</th><th></th></tr></thead><tbody>${a.po.map(l=>`<tr><td><span class="code">${esc(l.doc)}</span></td><td>${esc(l.acctName)}${l.ic?' <span class="pill p-gold">Intercompany</span>':''}</td><td class="num">${fmt(l.q1)}</td><td class="num">${fmt(l.q2)}</td><td class="num">${fmt(l.out)}</td><td>${fdl(pd(l.added))}</td><td>${l.date?fdl(pd(l.date)):'<span class="pill p-grey">No date</span>'}</td><td>${l.link?`<span class="code">${esc(l.link)}</span>`:'<span class="sm">–</span>'}</td><td>${l.hold?'<span class="pill p-amber">On hold</span>':''}</td></tr>`).join('')}</tbody></table>`:'<div class="sm" style="color:var(--mut)">No purchase order lines.</div>';
+  const soT=a.so.length?`<table><thead><tr><th>SO</th><th>Customer</th><th>Ref</th><th class="num">Out</th><th class="num">Alloc</th><th>Ordered</th><th>Promised</th><th>B2B PO</th><th></th></tr></thead><tbody>${a.so.sort((x,y)=>(x.date||'9').localeCompare(y.date||'9')).map(l=>`<tr><td><span class="code">${esc(l.doc)}</span>${l.user?`<div class="sm">${esc(l.user)}</div>`:''}</td><td>${esc(l.acctName)}${l.ic?' <span class="pill p-gold">Intercompany</span>':''}</td><td class="sm">${esc(l.ref)}</td><td class="num">${fmt(l.out)}</td><td class="num">${fmt(l.alloc)}</td><td>${fdl(pd(l.added))}</td><td>${fdl(pd(l.date))}</td><td>${l.link?`<span class="code">${esc(l.link)}</span>${l.b2bN>1?` <span class="sm">+${l.b2bN-1}</span>`:''}`:((a.stk.b2bHist||0)>0?'<span class="pill p-amber">Not generated</span>':'<span class="sm">–</span>')}</td><td>${l.hold?'<span class="pill p-grey">On hold</span>':''}</td></tr>`).join('')}</tbody></table>`:'<div class="sm" style="color:var(--mut)">No live sales order lines.</div>';
+  const poT=a.po.length?`<table><thead><tr><th>PO</th><th>Supplier</th><th class="num">Ordered</th><th class="num">Received</th><th class="num">Out</th><th>Ordered</th><th>Expected</th><th>From SO</th><th></th></tr></thead><tbody>${a.po.map(l=>`<tr><td><span class="code">${esc(l.doc)}</span>${l.user?`<div class="sm">${esc(l.user)}</div>`:''}</td><td>${esc(l.acctName)}${l.ic?' <span class="pill p-gold">Intercompany</span>':''}</td><td class="num">${fmt(l.q1)}</td><td class="num">${fmt(l.q2)}</td><td class="num">${fmt(l.out)}</td><td>${fdl(pd(l.added))}</td><td>${l.date?fdl(pd(l.date)):'<span class="pill p-grey">No date</span>'}</td><td>${l.link?`<span class="code">${esc(l.link)}</span>`:'<span class="sm">–</span>'}</td><td>${l.hold?'<span class="pill p-amber">On hold</span>':''}</td></tr>`).join('')}</tbody></table>`:'<div class="sm" style="color:var(--mut)">No purchase order lines.</div>';
   const s=a.stk;
   return `<tr class="det"><td colspan="20"><div class="det">
     <div class="sm" style="margin-bottom:8px">${esc(s.name||'')} · Manufacturer <b>${esc(s.mfr||'(blank)')}</b> · Preferred supplier <b>${esc(s.supName||'none set')}</b>${s.supCode?` (${esc(s.supCode)})`:''} · Lead ${a.lead}d${s.lead==null||s.lead===0?' (default)':''} · MOQ ${fmt(s.moq||0)} · Group ${esc(s.grp||'–')} · Back-to-back POs last 12m: <b>${s.b2bHist||0}</b><br>
