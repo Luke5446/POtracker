@@ -187,6 +187,9 @@ textarea{width:100%;min-height:150px;font-size:11px;font-family:Consolas,monospa
         <div><input type="number" id="sSoon" min="0" max="60"> days <div class="h">Order-by date = earliest promised date minus the supplier lead time. Red when it has passed, amber when inside this window.</div></div>
         <label>Default lead time</label>
         <div><input type="number" id="sLead" min="0" max="120"> days <div class="h">Used when Sage has no lead time for the preferred supplier.</div></div>
+        <label>Team publishing (GitHub)</label>
+        <div><input type="text" id="sRepo" placeholder="owner/repo" autocomplete="off"><div class="h">The GitHub repository the team copy is served from. Publish writes <b>published.json</b> into it and every team page reads it back.</div>
+        <input type="password" id="sToken" placeholder="GitHub token (editor only)" autocomplete="off" style="margin-top:8px"><div class="h">Only the person who publishes needs this. Create a <b>fine-grained personal access token</b> on GitHub with <b>Contents: Read and write</b> on this repository only. It is kept in this browser and sent to GitHub only when you publish. Leave blank on other machines: they get the read-only team view.</div></div>
       </div>
     </div>
     <div class="foot">
@@ -218,7 +221,10 @@ let DISMISSED=lsGet(LS_DISMISSED,{});      // key co|code → {at, code, name, s
 let DATA={so:[],po:[],stk:[],ts:null};      // parsed rows
 let CODES=[];                               // aggregated per company+code
 let UI={tab:'order',co:'',q:'',sup:'',tile:'',open:{},sort:{}};
-let TEAM={db:null,user:null,canEdit:false,readOnly:false,meta:null,loadedVersion:0,dirty:false,busy:false};
+const LS_PUBV='potracker_pubversion', LS_GH='potracker_github';
+function guessRepo(){const seg=location.pathname.split('/').filter(Boolean);const owner=location.hostname.split('.')[0];return seg.length?owner+'/'+seg[0]:''}
+const GH=Object.assign({repo:(location.hostname.endsWith('github.io')?guessRepo():''),token:'',etag:null},lsGet(LS_GH,{}));
+let TEAM={mode:null,db:null,user:null,canEdit:false,readOnly:false,meta:null,loadedVersion:0,dirty:false,busy:false};
 
 function lsGet(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
@@ -587,6 +593,7 @@ function openSettings(){
   document.getElementById('sHoldSO').checked=!!SET.holdSO;
   document.getElementById('sSoon').value=SET.soon;
   document.getElementById('sLead').value=SET.lead;
+  document.getElementById('sRepo').value=GH.repo;document.getElementById('sToken').value=GH.token;
   document.getElementById('setMsg').textContent='';
   document.getElementById('setOv').classList.add('show');
 }
@@ -596,7 +603,11 @@ function saveSettings(){
   SET.holdSO=document.getElementById('sHoldSO').checked;
   SET.soon=Math.max(0,parseInt(document.getElementById('sSoon').value)||0);
   SET.lead=Math.max(0,parseInt(document.getElementById('sLead').value)||0);
+  const repo=document.getElementById('sRepo').value.trim(),token=document.getElementById('sToken').value.trim();
+  const ghChanged=repo!==GH.repo||token!==GH.token;
+  GH.repo=repo;GH.token=token;lsSet(LS_GH,{repo,token});
   lsSet(LS_SET,SET);markDirty();build();render();
+  if(ghChanged){document.getElementById('setMsg').textContent='Saved – reloading…';setTimeout(()=>location.reload(),500);return}
   document.getElementById('setMsg').textContent='Saved.';document.getElementById('setMsg').className='msg ok';setTimeout(()=>closeOv('setOv'),600);
 }
 
@@ -614,42 +625,87 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelect
   initTeam();
 })();
 
-/* ── team publish (only when opened inside the claude.ai artifact viewer) ──
+/* ── team publish ──────────────────────────────────────────────────────
    One editor pastes, dismisses and sets things up locally, then presses
-   Publish for team. That writes the paste (gzip + base64, in chunks under
-   the 256 KiB document cap), the dismissed list and the settings to the
-   shared store. Everyone else gets a read-only view that follows the
-   latest publish. Opened as a plain file the app behaves exactly as before. */
-const LS_PUBV='potracker_pubversion';
-function markDirty(){if(!TEAM.db||TEAM.readOnly)return;TEAM.dirty=true;teamBar()}
-async function initTeam(){
-  if(!(window.claude&&typeof window.claude.use==='function'))return;   // plain file / GitHub: no team features
-  let db=null,user=null;
-  try{[db,user]=await Promise.all([window.claude.use('db'),window.claude.use('user')])}catch(e){}
-  if(!db){const el=document.getElementById('teamBar');el.hidden=false;el.innerHTML='<span class="pill p-grey">Local only</span> Team publishing is not available in this view. Open the POtracker link from claude.ai (the artifact viewer), not as a saved file or a standalone tab.';return}
-  TEAM.db=db;TEAM.user=user;
-  TEAM.canEdit=user?await user.canEdit():false;
-  TEAM.readOnly=!TEAM.canEdit;
-  if(TEAM.readOnly){document.getElementById('pasteBtn').hidden=true;document.getElementById('setBtn').hidden=true}
+   Publish for team. That writes the paste (gzip + base64), the dismissed
+   list and the settings to a shared store; everyone else gets a read-only
+   view that follows the latest publish. Two stores, chosen at start-up:
+     claude  – inside the claude.ai artifact viewer: its shared db, with
+               the paste in chunks under the 256 KiB document cap.
+     github  – the GitHub Pages copy (or any copy with a repo set in
+               Settings): published.json in the repository, written with
+               the editor's token through the GitHub contents API and read
+               by everyone through the same API (public repo, no token).
+   Opened as a plain file with neither, the app behaves as it always did. */
+function markDirty(){if(!TEAM.mode||TEAM.readOnly)return;TEAM.dirty=true;teamBar()}
+function enterTeamMode(mode,canEdit){
+  TEAM.mode=mode;TEAM.canEdit=canEdit;TEAM.readOnly=!canEdit;
+  if(TEAM.readOnly){document.getElementById('pasteBtn').hidden=true;if(mode==='claude')document.getElementById('setBtn').hidden=true}
   else document.getElementById('pubBtn').hidden=false;
   document.getElementById('teamBar').hidden=false;
   render();teamBar();
-  db.doc('team/meta').onSnapshot(async snap=>{
-    TEAM.meta=snap.exists?snap.data():null;
-    const v=TEAM.meta?TEAM.meta.version||0:0;
-    const localV=Number(lsGet(LS_PUBV,0))||0;
-    const haveLocal=!!DATA.stk.length;
-    // viewers always follow the publish; editors only when they have nothing of their own (new machine) or are already on the published version
-    if(v&&v!==TEAM.loadedVersion&&(TEAM.readOnly||!haveLocal||(localV===0||localV<v)&&!TEAM.dirty))await loadPublished();
-    teamBar();
-  },e=>{teamBar('Team data unavailable ('+e.code+')')});
 }
-async function loadPublished(){
-  const m=TEAM.meta;if(!m||!TEAM.db)return;
+function shouldFollow(v){
+  const localV=Number(lsGet(LS_PUBV,0))||0;const haveLocal=!!DATA.stk.length;
+  // viewers always follow the publish; editors only when they have nothing of their own (new machine) or are already on an older published version with no unpublished work
+  return v&&v!==TEAM.loadedVersion&&(TEAM.readOnly||!haveLocal||(localV===0||localV<v)&&!TEAM.dirty);
+}
+async function initTeam(){
+  if(window.claude&&typeof window.claude.use==='function'){
+    let db=null,user=null;
+    try{[db,user]=await Promise.all([window.claude.use('db'),window.claude.use('user')])}catch(e){}
+    if(db){
+      TEAM.db=db;TEAM.user=user;
+      enterTeamMode('claude',user?await user.canEdit():false);
+      db.doc('team/meta').onSnapshot(async snap=>{
+        TEAM.meta=snap.exists?snap.data():null;
+        if(shouldFollow(TEAM.meta?TEAM.meta.version||0:0))await loadPublished();
+        teamBar();
+      },e=>{teamBar('Team data unavailable ('+e.code+')')});
+      return;
+    }
+    if(!GH.repo){const el=document.getElementById('teamBar');el.hidden=false;el.innerHTML='<span class="pill p-grey">Local only</span> Team publishing is not available in this view. Open the POtracker link from claude.ai, or use the GitHub Pages copy.';return}
+  }
+  if(!GH.repo)return;                                   // plain file, nothing configured: local as before
+  enterTeamMode('github',!!GH.token);
+  await ghCheck(true);
+  setInterval(()=>ghCheck(false),120000);                // 304s do not count against GitHub's rate limit
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)ghCheck(false)});
+}
+/* GitHub store */
+function ghUrl(){return `https://api.github.com/repos/${GH.repo}/contents/published.json`}
+function ghHeaders(extra){const h=Object.assign({'Accept':'application/vnd.github.raw+json','X-GitHub-Api-Version':'2022-11-28'},extra||{});if(GH.token)h.Authorization='Bearer '+GH.token;return h}
+async function ghCheck(first){
+  if(TEAM.busy)return;
   try{
-    const parts=[];
-    for(let i=0;i<(m.chunks||0);i++){const c=await TEAM.db.doc('team/data/chunks/c'+i).get();if(!c.exists)throw new Error('chunk '+i+' missing');parts.push(c.data().t||'')}
-    let raw=parts.join('');
+    const r=await fetch(ghUrl(),{headers:ghHeaders(GH.etag?{'If-None-Match':GH.etag}:{}),cache:'no-store'});
+    if(r.status===304)return;
+    if(r.status===404){TEAM.meta=null;teamBar();return}
+    if(!r.ok)throw new Error('GitHub '+r.status);
+    GH.etag=r.headers.get('ETag');
+    const j=await r.json();
+    TEAM.meta=j;TEAM.pending=j;
+    if(shouldFollow(j.version||0))await loadPublished();
+    teamBar();
+  }catch(e){teamBar((first?'Could not reach GitHub: ':'')+(e.message||e))}
+}
+async function ghSha(){
+  const r=await fetch(ghUrl(),{headers:ghHeaders({'Accept':'application/vnd.github+json'}),cache:'no-store'});
+  if(r.status===404)return null;
+  if(!r.ok)throw new Error('GitHub '+r.status+(r.status===401||r.status===403?' – check the token in Settings':''));
+  return (await r.json()).sha;
+}
+async function ghWho(){try{const r=await fetch('https://api.github.com/user',{headers:ghHeaders({'Accept':'application/vnd.github+json'})});if(r.ok)return (await r.json()).login||''}catch(e){}return ''}
+/* shared */
+async function loadPublished(){
+  const m=TEAM.meta;if(!m)return;
+  try{
+    let raw='';
+    if(TEAM.mode==='claude'){
+      const parts=[];
+      for(let i=0;i<(m.chunks||0);i++){const c=await TEAM.db.doc('team/data/chunks/c'+i).get();if(!c.exists)throw new Error('chunk '+i+' missing');parts.push(c.data().t||'')}
+      raw=parts.join('');
+    }else raw=m.data||'';
     if(m.enc==='gzip'){raw=await ungz(raw)}
     if(m.settings)SET=Object.assign({},DEF_SET,m.settings);
     DISMISSED=m.dismissed||{};
@@ -659,20 +715,31 @@ async function loadPublished(){
   }catch(e){teamBar('Could not load the team publish: '+(e.message||e.code||e))}
 }
 async function publishTeam(){
-  if(!TEAM.db||TEAM.busy)return;
+  if(!TEAM.mode||TEAM.busy)return;
   const raw=localStorage.getItem(LS_RAW)||'';
   if(!raw||!DATA.stk.length){teamBar('Paste today\'s data before publishing.');return}
   const btn=document.getElementById('pubBtn');TEAM.busy=true;btn.disabled=true;btn.textContent='Publishing…';
   try{
     let enc='raw',body=raw;
     if(window.CompressionStream){try{body=await gz(raw);enc='gzip'}catch(e){body=raw;enc='raw'}}
-    const CH=200000,n=Math.ceil(body.length/CH);
-    for(let i=0;i<n;i++)await TEAM.db.doc('team/data/chunks/c'+i).set({t:body.slice(i*CH,(i+1)*CH)});
-    const old=TEAM.meta?TEAM.meta.chunks||0:0;
-    for(let i=n;i<old;i++)await TEAM.db.doc('team/data/chunks/c'+i).delete();
-    const by=TEAM.user?await TEAM.user.id():null;
     const version=Date.now();
-    await TEAM.db.doc('team/meta').set({version,ts:DATA.ts||new Date().toISOString(),by,enc,chunks:n,bytes:raw.length,dismissed:DISMISSED,settings:SET,so:DATA.so.length,po:DATA.po.length,stk:DATA.stk.length});
+    const meta={version,ts:DATA.ts||new Date().toISOString(),enc,bytes:raw.length,dismissed:DISMISSED,settings:SET,so:DATA.so.length,po:DATA.po.length,stk:DATA.stk.length};
+    if(TEAM.mode==='claude'){
+      const CH=200000,n=Math.ceil(body.length/CH);
+      for(let i=0;i<n;i++)await TEAM.db.doc('team/data/chunks/c'+i).set({t:body.slice(i*CH,(i+1)*CH)});
+      const old=TEAM.meta?TEAM.meta.chunks||0:0;
+      for(let i=n;i<old;i++)await TEAM.db.doc('team/data/chunks/c'+i).delete();
+      meta.by=TEAM.user?await TEAM.user.id():null;meta.chunks=n;
+      await TEAM.db.doc('team/meta').set(meta);
+    }else{
+      meta.byName=await ghWho();meta.data=body;
+      const sha=await ghSha();
+      const put={message:`Publish POtracker data ${new Date().toISOString().slice(0,16).replace('T',' ')}`,content:b64(new TextEncoder().encode(JSON.stringify(meta)))};
+      if(sha)put.sha=sha;
+      const r=await fetch(ghUrl(),{method:'PUT',headers:ghHeaders({'Accept':'application/vnd.github+json','Content-Type':'application/json'}),body:JSON.stringify(put)});
+      if(!r.ok){let d='';try{d=(await r.json()).message||''}catch(e){}throw new Error('GitHub '+r.status+(d?' – '+d:''))}
+      GH.etag=null;TEAM.meta=meta;
+    }
     TEAM.loadedVersion=version;lsSet(LS_PUBV,version);TEAM.dirty=false;
     teamBar('Published for the team.');
   }catch(e){teamBar('Publish failed: '+(e.message||e.code||e))}
@@ -682,13 +749,15 @@ async function teamBar(msg){
   const el=document.getElementById('teamBar');if(el.hidden)return;
   const m=TEAM.meta;let who='';
   if(m&&m.by&&TEAM.user){try{const ps=await TEAM.user.profiles([m.by]);who=(ps[m.by]&&ps[m.by].name)||''}catch(e){}}
+  if(m&&m.byName)who=m.byName;
   const when=m&&m.ts?new Date(m.ts):null;
   const pub=m?`Team view published <b>${when?when.toLocaleDateString('en-GB',{weekday:'short',day:'2-digit',month:'short'})+' '+when.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'–'}</b>${who?' by <b>'+esc(who)+'</b>':''}`:'Nothing published for the team yet.';
   const newer=m&&(m.version||0)>TEAM.loadedVersion&&!TEAM.readOnly;
   el.innerHTML=(TEAM.readOnly?'<span class="pill p-blue">Team view</span> ':'<span class="pill p-gold">Editor</span> ')+pub
     +(TEAM.dirty?' · <span class="pill p-amber">Unpublished changes</span>':'')
     +(newer?` · <a onclick="loadPublished()">Load the latest publish</a>`:'')
-    +(msg?` · <span>${esc(msg)}</span>`:'');
+    +(msg?` · <span>${esc(msg)}</span>`:'')
+    +(TEAM.mode==='github'&&TEAM.readOnly?' · <span class="sm">To publish from this machine, add the GitHub token in Settings.</span>':'');
   const btn=document.getElementById('pubBtn');btn.classList.toggle('dirty',!!TEAM.dirty);
 }
 async function gz(str){const cs=new CompressionStream('gzip');const w=cs.writable.getWriter();w.write(new TextEncoder().encode(str));w.close();return b64(await new Response(cs.readable).arrayBuffer())}
