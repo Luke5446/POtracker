@@ -79,8 +79,9 @@
                         was raised in Sage (header DocumentDate, yyyy-mm-dd).
                         Shown as "Ordered" on the app's drill-down. STK: blank
      AD EnteredBy       SO/PO: the Sage user who raised the order (header
-                        UserName - the "User" column on the Sales Order List).
-                        Shown under the order number on the drill-down. STK: blank
+                        DocumentCreatedBy - the "Document Created By" column on
+                        the Sales Order List). Shown under the order number on
+                        the drill-down. STK: blank
 
    MANUFACTURER (T) - the app's made-in-house test is an EXACT match after
    trimming, on this list:
@@ -108,11 +109,11 @@
    the document date, swap DocumentDate for DateTimeCreated in the four
    OrderDate lines below - same format, same position.
 
-   ENTERED BY (AD): SOPOrderReturn.UserName / POPOrderReturn.UserName, the
-   Sage login that created the order. This is the "User" column on the Sales
-   Order List. Sage 200 has no separate sales-rep field on the SOP header; if
-   the business records the rep in an analysis code instead, swap UserName
-   for that AnalysisCodeN in the four EnteredBy lines below.
+   ENTERED BY (AD): SOPOrderReturn.DocumentCreatedBy and
+   POPOrderReturn.DocumentCreatedBy, the Sage login that created the order -
+   the "Document Created By" column on the Sales Order List ('Import' on
+   orders that came in through the import routine). There is no UserName
+   column on these tables (confirmed Sep 2026, the first cut errored on it).
 
    STATUS FILTERS: DocumentTypeID 0 = order (not return). DocumentStatusID:
    0 = live, 1 = on hold, 2 = complete, 4 = seen once (cancelled or disputed).
@@ -187,7 +188,7 @@ SELECT
     /* Date the order was raised in Sage - see ORDER DATE above. */
     ISNULL(CONVERT(varchar(10), sor.DocumentDate, 23),'')       AS OrderDate,
     /* Sage user who raised the order - see ENTERED BY above. */
-    LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(ISNULL(sor.UserName,''),
+    LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(ISNULL(sor.DocumentCreatedBy,''),
         CHAR(9),' '), CHAR(13),' '), CHAR(10),' ')))            AS EnteredBy
 FROM        S200_LIVE.dbo.SOPOrderReturn      sor
 INNER JOIN  S200_LIVE.dbo.SOPOrderReturnLine  sorl ON sorl.SOPOrderReturnID    = sor.SOPOrderReturnID
@@ -231,7 +232,7 @@ SELECT
     CASE WHEN cust.CustomerAccountNumber = 'TIB003' THEN 'Y' ELSE '' END,
     CAST(sor.DocumentStatusID AS varchar(10)),
     ISNULL(CONVERT(varchar(10), sor.DocumentDate, 23),''),
-    LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(ISNULL(sor.UserName,''),
+    LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(ISNULL(sor.DocumentCreatedBy,''),
         CHAR(9),' '), CHAR(13),' '), CHAR(10),' ')))
 FROM        OliverHarveyLive.dbo.SOPOrderReturn      sor
 INNER JOIN  OliverHarveyLive.dbo.SOPOrderReturnLine  sorl ON sorl.SOPOrderReturnID    = sor.SOPOrderReturnID
@@ -284,7 +285,7 @@ SELECT
     ''                                                          AS Intercompany,
     CAST(por.DocumentStatusID AS varchar(10))                   AS DocStatusID,
     ISNULL(CONVERT(varchar(10), por.DocumentDate, 23),'')       AS OrderDate,
-    LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(ISNULL(por.UserName,''),
+    LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(ISNULL(por.DocumentCreatedBy,''),
         CHAR(9),' '), CHAR(13),' '), CHAR(10),' ')))            AS EnteredBy
 FROM        S200_LIVE.dbo.POPOrderReturn      por
 INNER JOIN  S200_LIVE.dbo.POPOrderReturnLine  porl ON porl.POPOrderReturnID    = por.POPOrderReturnID
@@ -328,7 +329,7 @@ SELECT
     CASE WHEN supp.SupplierAccountNumber = 'TIB001' THEN 'Y' ELSE '' END,
     CAST(por.DocumentStatusID AS varchar(10)),
     ISNULL(CONVERT(varchar(10), por.DocumentDate, 23),''),
-    LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(ISNULL(por.UserName,''),
+    LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(ISNULL(por.DocumentCreatedBy,''),
         CHAR(9),' '), CHAR(13),' '), CHAR(10),' ')))
 FROM        OliverHarveyLive.dbo.POPOrderReturn      por
 INNER JOIN  OliverHarveyLive.dbo.POPOrderReturnLine  porl ON porl.POPOrderReturnID    = por.POPOrderReturnID
