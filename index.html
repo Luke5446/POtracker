@@ -28,6 +28,10 @@ header .status b{color:var(--gold);font-weight:600}
 .btn-navy{background:var(--navy);color:#fff}
 .btn-line{background:#fff;color:var(--navy);border:1px solid var(--line)}
 .btn-sm{padding:5px 10px;font-size:12px}
+.btn-ghost.dirty{background:var(--gold);color:#22262e;border-color:var(--gold)}
+.btn:disabled{opacity:.55;cursor:default}
+.team{font-size:12px;color:var(--mut);margin:-4px 0 10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.team b{color:var(--navy)} .team a{color:var(--navy);cursor:pointer;text-decoration:underline}
 .btn:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--gold);outline-offset:1px}
 nav.tabs{display:flex;gap:2px;background:var(--navy2);padding:0 14px;flex-wrap:wrap}
 nav.tabs button{background:none;border:0;color:#cfd8e8;padding:11px 15px;font-size:13.5px;cursor:pointer;border-bottom:3px solid transparent;font-family:inherit}
@@ -121,8 +125,9 @@ textarea{width:100%;min-height:150px;font-size:11px;font-family:Consolas,monospa
   </div>
   <div class="spacer"></div>
   <div class="status" id="hdrStatus">No data loaded</div>
-  <button class="btn btn-gold" onclick="openPaste()">Paste today's data</button>
-  <button class="btn btn-ghost" onclick="openSettings()">Settings</button>
+  <button class="btn btn-gold" id="pasteBtn" onclick="openPaste()">Paste today's data</button>
+  <button class="btn btn-ghost" id="pubBtn" onclick="publishTeam()" hidden>Publish for team</button>
+  <button class="btn btn-ghost" id="setBtn" onclick="openSettings()">Settings</button>
 </header>
 
 <nav class="tabs" id="tabs">
@@ -136,6 +141,7 @@ textarea{width:100%;min-height:150px;font-size:11px;font-family:Consolas,monospa
 </nav>
 
 <main>
+  <div class="team" id="teamBar" hidden></div>
   <div class="filters">
     <div class="seg" id="coSeg">
       <button data-co="" class="on">Both companies</button>
@@ -212,6 +218,7 @@ let DISMISSED=lsGet(LS_DISMISSED,{});      // key co|code → {at, code, name, s
 let DATA={so:[],po:[],stk:[],ts:null};      // parsed rows
 let CODES=[];                               // aggregated per company+code
 let UI={tab:'order',co:'',q:'',sup:'',tile:'',open:{},sort:{}};
+let TEAM={db:null,user:null,canEdit:false,readOnly:false,meta:null,loadedVersion:0,dirty:false,busy:false};
 
 function lsGet(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
@@ -325,7 +332,7 @@ function render(){
   document.getElementById('n-dismissed').textContent=Object.keys(DISMISSED).length;
   document.getElementById('n-review').textContent=reviewCount();
   const v=document.getElementById('view');
-  if(!DATA.so.length&&!DATA.stk.length){v.innerHTML=`<div class="card"><div class="empty"><b>No data yet</b>Refresh the PO_Tracker Excel query, copy columns A to AD, then use <i>Paste today's data</i>.</div></div>`;document.getElementById('rc').textContent='';return}
+  if(!DATA.so.length&&!DATA.stk.length){v.innerHTML=`<div class="card"><div class="empty"><b>No data yet</b>${TEAM.readOnly?'Nothing has been published for the team yet.':'Refresh the PO_Tracker Excel query, copy columns A to AD, then use <i>Paste today\'s data</i>.'}</div></div>`;document.getElementById('rc').textContent='';return}
   ({order:renderOrder,b2b:renderB2B,covered:renderCovered,held:renderHeld,transfers:renderTransfers,dismissed:renderDismissed,review:renderReview})[UI.tab]();
   const ts=DATA.ts?new Date(DATA.ts):null;
   document.getElementById('hdrStatus').innerHTML=`Data loaded <b>${ts?ts.toLocaleDateString('en-GB',{weekday:'short',day:'2-digit',month:'short'})+' '+ts.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'–'}</b><br>${DATA.so.length} SO lines · ${DATA.po.length} PO lines · ${DATA.stk.length} codes`;
@@ -407,16 +414,16 @@ function renderOrder(){
   const title=UI.tile==='pop'?'Purchase orders on hold <span class="r">bought-in codes with a PO line on hold – it will not arrive until released</span>':UI.tile==='sop'?'Sales orders on hold <span class="r">bought-in codes with a held sales order line – not counted as demand unless switched on in Settings</span>':'Needs ordering <span class="r">bought-in, not stock held, sales demand not covered by free stock or a purchase order</span>';
   document.getElementById('view').innerHTML=tiles(t)+`<div class="card"><h2>${title}</h2>
     <div class="tw"><table><thead><tr><th></th>${th('Co','co')}${th('Code','code')}${th('Supplier','sup')}${th('Manufacturer','mfr')}${th('SO out','soOut','num')}${th('Free','free','num')}${th('On PO','poOut','num')}${th('Need','need','num')}<th class="num">MOQ</th>${th('Lead','lead','num')}${th('Promised','due')}${th('Order by','orderBy')}<th>Status</th><th></th></tr></thead>
-    <tbody>${rows.length?rowsHtml(rows,a=>`<td>${a.b2bMiss.length?'<span class="pill p-amber" title="Item is normally back-to-back but no PO was generated">B2B</span>':''}</td><td>${coTag(a.co)}</td>${codeCell(a)}<td>${esc(a.stk.supName||'')}<div class="sm">${esc(a.stk.supNo||'')}</div></td><td class="sm">${esc(a.stk.mfr||'')||'<span class="pill p-grey">blank</span>'}</td><td class="num">${fmt(a.soOut)}${a.soAlloc?`<div class="sm">${fmt(a.soAlloc)} alloc</div>`:''}</td><td class="num">${fmt(a.free)}</td><td class="num">${fmt(a.poOut)}${a.poOutHold?`<div class="sm">+${fmt(a.poOutHold)} held</div>`:''}</td><td class="num need"><b>${fmt(a.need)}</b>${a.stk.moq>a.need?`<div class="sm">MOQ ${fmt(a.stk.moq)}</div>`:''}</td><td class="num">${a.stk.moq?fmt(a.stk.moq):'–'}</td><td class="num">${a.lead}d</td><td>${fd(a.due)}</td><td>${fd(a.orderBy)}</td><td>${a.poOutHold>=a.need&&a.poOutHold>0?'<span class="pill p-blue">Covered if PO released</span>':urgPill(a)}</td><td>${a.dismissed?'<span class="pill p-grey">Dismissed</span>':`<button class="btn btn-line btn-sm" onclick="event.stopPropagation();dismiss('${esc(a.co+'|'+a.code)}')" title="Hide this code from Needs ordering, including on future pastes, until undone">Dismiss</button>`}</td>`):`<tr><td colspan="15"><div class="empty"><b>Nothing to order</b>Every bought-in, non-stock sales line is covered by free stock or a purchase order.</div></td></tr>`}</tbody></table></div></div>
+    <tbody>${rows.length?rowsHtml(rows,a=>`<td>${a.b2bMiss.length?'<span class="pill p-amber" title="Item is normally back-to-back but no PO was generated">B2B</span>':''}</td><td>${coTag(a.co)}</td>${codeCell(a)}<td>${esc(a.stk.supName||'')}<div class="sm">${esc(a.stk.supNo||'')}</div></td><td class="sm">${esc(a.stk.mfr||'')||'<span class="pill p-grey">blank</span>'}</td><td class="num">${fmt(a.soOut)}${a.soAlloc?`<div class="sm">${fmt(a.soAlloc)} alloc</div>`:''}</td><td class="num">${fmt(a.free)}</td><td class="num">${fmt(a.poOut)}${a.poOutHold?`<div class="sm">+${fmt(a.poOutHold)} held</div>`:''}</td><td class="num need"><b>${fmt(a.need)}</b>${a.stk.moq>a.need?`<div class="sm">MOQ ${fmt(a.stk.moq)}</div>`:''}</td><td class="num">${a.stk.moq?fmt(a.stk.moq):'–'}</td><td class="num">${a.lead}d</td><td>${fd(a.due)}</td><td>${fd(a.orderBy)}</td><td>${a.poOutHold>=a.need&&a.poOutHold>0?'<span class="pill p-blue">Covered if PO released</span>':urgPill(a)}</td><td>${a.dismissed?'<span class="pill p-grey">Dismissed</span>':TEAM.readOnly?'':`<button class="btn btn-line btn-sm" onclick="event.stopPropagation();dismiss('${esc(a.co+'|'+a.code)}')" title="Hide this code from Needs ordering, including on future pastes, until undone">Dismiss</button>`}</td>`):`<tr><td colspan="15"><div class="empty"><b>Nothing to order</b>Every bought-in, non-stock sales line is covered by free stock or a purchase order.</div></td></tr>`}</tbody></table></div></div>
     <div class="legend"><span>Need = (SO outstanding − allocated) − free stock − PO outstanding.</span><span>Order by = earliest promised date − supplier lead time.</span><span>Dismissed codes stay hidden on future pastes until undone from the Dismissed tab.</span></div>`;
 }
 function dismiss(key){
   const a=CODES.find(c=>c.co+'|'+c.code===key);if(!a)return;
   DISMISSED[key]={at:new Date().toISOString(),co:a.co,code:a.code,name:a.stk.name||'',sup:a.stk.supName||'',need:a.need};
-  lsSet(LS_DISMISSED,DISMISSED);build();render();
+  lsSet(LS_DISMISSED,DISMISSED);markDirty();build();render();
 }
-function undismiss(key){delete DISMISSED[key];lsSet(LS_DISMISSED,DISMISSED);build();render()}
-function clearDismissedDone(){Object.keys(DISMISSED).forEach(key=>{const a=CODES.find(c=>c.co+'|'+c.code===key);if(!a||!(a.cls.bought&&!a.stockHeld&&a.need>0))delete DISMISSED[key]});lsSet(LS_DISMISSED,DISMISSED);build();render()}
+function undismiss(key){delete DISMISSED[key];lsSet(LS_DISMISSED,DISMISSED);markDirty();build();render()}
+function clearDismissedDone(){Object.keys(DISMISSED).forEach(key=>{const a=CODES.find(c=>c.co+'|'+c.code===key);if(!a||!(a.cls.bought&&!a.stockHeld&&a.need>0))delete DISMISSED[key]});lsSet(LS_DISMISSED,DISMISSED);markDirty();build();render()}
 
 /* Back-to-back check */
 function renderB2B(){
@@ -516,9 +523,9 @@ function renderDismissed(){
   rows.sort((x,y)=>(y.d.at||'').localeCompare(x.d.at||''));
   document.getElementById('rc').textContent=`${rows.length} code${rows.length===1?'':'s'}`;
   document.getElementById('view').innerHTML=tiles(t)+`<div class="card"><h2>Dismissed <span class="r">hidden from Needs ordering on every paste until undone</span>
-    <button class="btn btn-line btn-sm" style="margin-left:12px" onclick="event.stopPropagation();clearDismissedDone()" title="Remove dismissals for codes that no longer need ordering">Clear those no longer needed</button></h2>
+    ${TEAM.readOnly?'':'<button class="btn btn-line btn-sm" style="margin-left:12px" onclick="event.stopPropagation();clearDismissedDone()" title="Remove dismissals for codes that no longer need ordering">Clear those no longer needed</button>'}</h2>
     <div class="tw"><table><thead><tr><th>Co</th><th>Code</th><th>Supplier</th><th class="num">Need when dismissed</th><th class="num">Need today</th><th>Dismissed</th><th>Status</th><th></th></tr></thead>
-    <tbody>${rows.length?rows.map(({key,d,a})=>{const open=a&&UI.open[key];return `<tr class="row ${open?'open':''}" onclick="${a?`toggleOpen('${esc(key)}')`:''}"><td>${coTag(d.co)}</td><td><span class="code">${esc(d.code)}</span>${copyBtn(d.code)}<div class="desc">${esc((a&&a.stk.name)||d.name||'')}</div></td><td class="sm">${esc((a&&a.stk.supName)||d.sup||'')}</td><td class="num">${fmt(d.need||0)}</td><td class="num">${a?fmt(a.need):'–'}</td><td>${d.at?fdl(new Date(d.at)):'–'}</td><td>${still({a})?'<span class="pill p-amber">Still short</span>':a?'<span class="pill p-green">Covered / not needed</span>':'<span class="pill p-grey">Not in today\'s data</span>'}</td><td><button class="btn btn-line btn-sm" onclick="event.stopPropagation();undismiss('${esc(key)}')">Undo</button></td></tr>${open?detail(a):''}`}).join(''):`<tr><td colspan="8"><div class="empty"><b>Nothing dismissed</b>Use the Dismiss button on Needs ordering to park a code here.</div></td></tr>`}</tbody></table></div></div>`;
+    <tbody>${rows.length?rows.map(({key,d,a})=>{const open=a&&UI.open[key];return `<tr class="row ${open?'open':''}" onclick="${a?`toggleOpen('${esc(key)}')`:''}"><td>${coTag(d.co)}</td><td><span class="code">${esc(d.code)}</span>${copyBtn(d.code)}<div class="desc">${esc((a&&a.stk.name)||d.name||'')}</div></td><td class="sm">${esc((a&&a.stk.supName)||d.sup||'')}</td><td class="num">${fmt(d.need||0)}</td><td class="num">${a?fmt(a.need):'–'}</td><td>${d.at?fdl(new Date(d.at)):'–'}</td><td>${still({a})?'<span class="pill p-amber">Still short</span>':a?'<span class="pill p-green">Covered / not needed</span>':'<span class="pill p-grey">Not in today\'s data</span>'}</td><td>${TEAM.readOnly?'':`<button class="btn btn-line btn-sm" onclick="event.stopPropagation();undismiss('${esc(key)}')">Undo</button>`}</td></tr>${open?detail(a):''}`}).join(''):`<tr><td colspan="8"><div class="empty"><b>Nothing dismissed</b>${TEAM.readOnly?'The buyer dismisses codes from Needs ordering; they appear here.':'Use the Dismiss button on Needs ordering to park a code here.'}</div></td></tr>`}</tbody></table></div></div>`;
 }
 
 /* Review */
@@ -568,7 +575,7 @@ function loadPaste(){
   const p=parseRaw(txt);
   if(!p.stk.length||(!p.so.length&&!p.po.length)){m.textContent=p.bad?`Nothing usable – ${p.bad} rows did not look like SO / PO / STK rows. Copy columns A to AB.`:'Nothing usable – paste all rows, columns A to AB.';m.className='msg bad';return}
   try{localStorage.setItem(LS_RAW,txt);localStorage.setItem(LS_TS,new Date().toISOString())}catch(e){m.textContent='Loaded, but too large to keep in this browser – it will need pasting again next time.';m.className='msg bad'}
-  applyRaw(txt,new Date().toISOString());
+  applyRaw(txt,new Date().toISOString());markDirty();
   m.textContent=`Loaded ${p.so.length} SO lines, ${p.po.length} PO lines, ${p.stk.length} codes${p.bad?` (${p.bad} rows skipped)`:''}.`;m.className='msg ok';
   setTimeout(()=>closeOv('pasteOv'),900);
 }
@@ -589,7 +596,7 @@ function saveSettings(){
   SET.holdSO=document.getElementById('sHoldSO').checked;
   SET.soon=Math.max(0,parseInt(document.getElementById('sSoon').value)||0);
   SET.lead=Math.max(0,parseInt(document.getElementById('sLead').value)||0);
-  lsSet(LS_SET,SET);build();render();
+  lsSet(LS_SET,SET);markDirty();build();render();
   document.getElementById('setMsg').textContent='Saved.';document.getElementById('setMsg').className='msg ok';setTimeout(()=>closeOv('setOv'),600);
 }
 
@@ -604,7 +611,90 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelect
 (function init(){
   const raw=localStorage.getItem(LS_RAW);
   if(raw)applyRaw(raw,localStorage.getItem(LS_TS));else render();
+  initTeam();
 })();
+
+/* ── team publish (only when opened inside the claude.ai artifact viewer) ──
+   One editor pastes, dismisses and sets things up locally, then presses
+   Publish for team. That writes the paste (gzip + base64, in chunks under
+   the 256 KiB document cap), the dismissed list and the settings to the
+   shared store. Everyone else gets a read-only view that follows the
+   latest publish. Opened as a plain file the app behaves exactly as before. */
+const LS_PUBV='potracker_pubversion';
+function markDirty(){if(!TEAM.db||TEAM.readOnly)return;TEAM.dirty=true;teamBar()}
+async function initTeam(){
+  if(!(window.claude&&typeof window.claude.use==='function'))return;
+  let db=null,user=null;
+  try{[db,user]=await Promise.all([window.claude.use('db'),window.claude.use('user')])}catch(e){return}
+  if(!db)return;
+  TEAM.db=db;TEAM.user=user;
+  TEAM.canEdit=user?await user.canEdit():false;
+  TEAM.readOnly=!TEAM.canEdit;
+  if(TEAM.readOnly){document.getElementById('pasteBtn').hidden=true;document.getElementById('setBtn').hidden=true}
+  else document.getElementById('pubBtn').hidden=false;
+  document.getElementById('teamBar').hidden=false;
+  render();teamBar();
+  db.doc('team/meta').onSnapshot(async snap=>{
+    TEAM.meta=snap.exists?snap.data():null;
+    const v=TEAM.meta?TEAM.meta.version||0:0;
+    const localV=Number(lsGet(LS_PUBV,0))||0;
+    const haveLocal=!!DATA.stk.length;
+    // viewers always follow the publish; editors only when they have nothing of their own (new machine) or are already on the published version
+    if(v&&v!==TEAM.loadedVersion&&(TEAM.readOnly||!haveLocal||(localV===0||localV<v)&&!TEAM.dirty))await loadPublished();
+    teamBar();
+  },e=>{teamBar('Team data unavailable ('+e.code+')')});
+}
+async function loadPublished(){
+  const m=TEAM.meta;if(!m||!TEAM.db)return;
+  try{
+    const parts=[];
+    for(let i=0;i<(m.chunks||0);i++){const c=await TEAM.db.doc('team/data/chunks/c'+i).get();if(!c.exists)throw new Error('chunk '+i+' missing');parts.push(c.data().t||'')}
+    let raw=parts.join('');
+    if(m.enc==='gzip'){raw=await ungz(raw)}
+    if(m.settings)SET=Object.assign({},DEF_SET,m.settings);
+    DISMISSED=m.dismissed||{};
+    if(!TEAM.readOnly){lsSet(LS_SET,SET);lsSet(LS_DISMISSED,DISMISSED);try{localStorage.setItem(LS_RAW,raw);localStorage.setItem(LS_TS,m.ts||'')}catch(e){}}
+    TEAM.loadedVersion=m.version||0;lsSet(LS_PUBV,TEAM.loadedVersion);TEAM.dirty=false;
+    applyRaw(raw,m.ts||null);
+  }catch(e){teamBar('Could not load the team publish: '+(e.message||e.code||e))}
+}
+async function publishTeam(){
+  if(!TEAM.db||TEAM.busy)return;
+  const raw=localStorage.getItem(LS_RAW)||'';
+  if(!raw||!DATA.stk.length){teamBar('Paste today\'s data before publishing.');return}
+  const btn=document.getElementById('pubBtn');TEAM.busy=true;btn.disabled=true;btn.textContent='Publishing…';
+  try{
+    let enc='raw',body=raw;
+    if(window.CompressionStream){try{body=await gz(raw);enc='gzip'}catch(e){body=raw;enc='raw'}}
+    const CH=200000,n=Math.ceil(body.length/CH);
+    for(let i=0;i<n;i++)await TEAM.db.doc('team/data/chunks/c'+i).set({t:body.slice(i*CH,(i+1)*CH)});
+    const old=TEAM.meta?TEAM.meta.chunks||0:0;
+    for(let i=n;i<old;i++)await TEAM.db.doc('team/data/chunks/c'+i).delete();
+    const by=TEAM.user?await TEAM.user.id():null;
+    const version=Date.now();
+    await TEAM.db.doc('team/meta').set({version,ts:DATA.ts||new Date().toISOString(),by,enc,chunks:n,bytes:raw.length,dismissed:DISMISSED,settings:SET,so:DATA.so.length,po:DATA.po.length,stk:DATA.stk.length});
+    TEAM.loadedVersion=version;lsSet(LS_PUBV,version);TEAM.dirty=false;
+    teamBar('Published for the team.');
+  }catch(e){teamBar('Publish failed: '+(e.message||e.code||e))}
+  TEAM.busy=false;btn.disabled=false;btn.textContent='Publish for team';
+}
+async function teamBar(msg){
+  const el=document.getElementById('teamBar');if(el.hidden)return;
+  const m=TEAM.meta;let who='';
+  if(m&&m.by&&TEAM.user){try{const ps=await TEAM.user.profiles([m.by]);who=(ps[m.by]&&ps[m.by].name)||''}catch(e){}}
+  const when=m&&m.ts?new Date(m.ts):null;
+  const pub=m?`Team view published <b>${when?when.toLocaleDateString('en-GB',{weekday:'short',day:'2-digit',month:'short'})+' '+when.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'–'}</b>${who?' by <b>'+esc(who)+'</b>':''}`:'Nothing published for the team yet.';
+  const newer=m&&(m.version||0)>TEAM.loadedVersion&&!TEAM.readOnly;
+  el.innerHTML=(TEAM.readOnly?'<span class="pill p-blue">Team view</span> ':'<span class="pill p-gold">Editor</span> ')+pub
+    +(TEAM.dirty?' · <span class="pill p-amber">Unpublished changes</span>':'')
+    +(newer?` · <a onclick="loadPublished()">Load the latest publish</a>`:'')
+    +(msg?` · <span>${esc(msg)}</span>`:'');
+  const btn=document.getElementById('pubBtn');btn.classList.toggle('dirty',!!TEAM.dirty);
+}
+async function gz(str){const cs=new CompressionStream('gzip');const w=cs.writable.getWriter();w.write(new TextEncoder().encode(str));w.close();return b64(await new Response(cs.readable).arrayBuffer())}
+async function ungz(b){const ds=new DecompressionStream('gzip');const w=ds.writable.getWriter();w.write(unb64(b));w.close();return await new Response(ds.readable).text()}
+function b64(buf){const u=new Uint8Array(buf);let s='';for(let i=0;i<u.length;i+=0x8000)s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000));return btoa(s)}
+function unb64(s){const bin=atob(s);const u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u}
 </script>
 </body>
 </html>
