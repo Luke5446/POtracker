@@ -28,10 +28,11 @@ header .status b{color:var(--gold);font-weight:600}
 .btn-navy{background:var(--navy);color:#fff}
 .btn-line{background:#fff;color:var(--navy);border:1px solid var(--line)}
 .btn-sm{padding:5px 10px;font-size:12px}
-.btn-ghost.dirty{background:var(--gold);color:#22262e;border-color:var(--gold)}
-.btn:disabled{opacity:.55;cursor:default}
-.team{font-size:12px;color:var(--mut);margin:-4px 0 10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.team b{color:var(--navy)} .team a{color:var(--navy);cursor:pointer;text-decoration:underline}
+.btn-green{background:#16a34a;color:#fff}
+.mode{font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;color:#fff;background:#1e40af;letter-spacing:.3px}
+body.viewer-mode .edit-only{display:none !important}
+.viewer-banner{display:none;background:#dbeafe;border-bottom:1px solid #93c5fd;padding:8px 20px;font-size:12px;color:#1e40af;text-align:center}
+body.viewer-mode .viewer-banner{display:block}
 .btn:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--gold);outline-offset:1px}
 nav.tabs{display:flex;gap:2px;background:var(--navy2);padding:0 14px;flex-wrap:wrap}
 nav.tabs button{background:none;border:0;color:#cfd8e8;padding:11px 15px;font-size:13.5px;cursor:pointer;border-bottom:3px solid transparent;font-family:inherit}
@@ -125,9 +126,10 @@ textarea{width:100%;min-height:150px;font-size:11px;font-family:Consolas,monospa
   </div>
   <div class="spacer"></div>
   <div class="status" id="hdrStatus">No data loaded</div>
-  <button class="btn btn-gold" id="pasteBtn" onclick="openPaste()">Paste today's data</button>
-  <button class="btn btn-ghost" id="pubBtn" onclick="publishTeam()" hidden>Publish for team</button>
-  <button class="btn btn-ghost" id="setBtn" onclick="openSettings()">Settings</button>
+  <span id="modeBadge" class="mode"></span>
+  <button class="btn btn-gold edit-only" id="pasteBtn" onclick="openPaste()">Paste today's data</button>
+  <button class="btn btn-green edit-only" id="pubBtn" onclick="publishTeam()">&#128228; Publish for team</button>
+  <button class="btn btn-ghost edit-only" id="setBtn" onclick="openSettings()">Settings</button>
 </header>
 
 <nav class="tabs" id="tabs">
@@ -140,8 +142,9 @@ textarea{width:100%;min-height:150px;font-size:11px;font-family:Consolas,monospa
   <button data-t="review">Review<span class="n" id="n-review">0</span></button>
 </nav>
 
+<div class="viewer-banner">&#128065; Read-only view of the latest POtracker data published by the buyer. <span id="bannerDate" style="font-weight:700"></span></div>
+
 <main>
-  <div class="team" id="teamBar" hidden></div>
   <div class="filters">
     <div class="seg" id="coSeg">
       <button data-co="" class="on">Both companies</button>
@@ -187,9 +190,6 @@ textarea{width:100%;min-height:150px;font-size:11px;font-family:Consolas,monospa
         <div><input type="number" id="sSoon" min="0" max="60"> days <div class="h">Order-by date = earliest promised date minus the supplier lead time. Red when it has passed, amber when inside this window.</div></div>
         <label>Default lead time</label>
         <div><input type="number" id="sLead" min="0" max="120"> days <div class="h">Used when Sage has no lead time for the preferred supplier.</div></div>
-        <label>Team publishing (GitHub)</label>
-        <div><input type="text" id="sRepo" placeholder="owner/repo" autocomplete="off"><div class="h">The GitHub repository the team copy is served from. Publish writes <b>published.json</b> into it and every team page reads it back.</div>
-        <input type="password" id="sToken" placeholder="GitHub token (editor only)" autocomplete="off" style="margin-top:8px"><div class="h">Only the person who publishes needs this. Create a <b>fine-grained personal access token</b> on GitHub with <b>Contents: Read and write</b> on this repository only. It is kept in this browser and sent to GitHub only when you publish. Leave blank on other machines: they get the read-only team view.</div></div>
       </div>
     </div>
     <div class="foot">
@@ -221,10 +221,8 @@ let DISMISSED=lsGet(LS_DISMISSED,{});      // key co|code → {at, code, name, s
 let DATA={so:[],po:[],stk:[],ts:null};      // parsed rows
 let CODES=[];                               // aggregated per company+code
 let UI={tab:'order',co:'',q:'',sup:'',tile:'',open:{},sort:{}};
-const LS_PUBV='potracker_pubversion', LS_GH='potracker_github';
-function guessRepo(){const seg=location.pathname.split('/').filter(Boolean);const owner=location.hostname.split('.')[0];return seg.length?owner+'/'+seg[0]:''}
-const GH=Object.assign({repo:(location.hostname.endsWith('github.io')?guessRepo():''),token:'',etag:null},lsGet(LS_GH,{}));
-let TEAM={mode:null,db:null,user:null,canEdit:false,readOnly:false,meta:null,loadedVersion:0,dirty:false,busy:false};
+const IS_EDITOR=/[?&]edit\b/.test(window.location.search);   // ?edit on the URL = editor; everyone else is view only
+let TEAM={readOnly:!IS_EDITOR};
 
 function lsGet(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch(e){return d}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
@@ -426,10 +424,10 @@ function renderOrder(){
 function dismiss(key){
   const a=CODES.find(c=>c.co+'|'+c.code===key);if(!a)return;
   DISMISSED[key]={at:new Date().toISOString(),co:a.co,code:a.code,name:a.stk.name||'',sup:a.stk.supName||'',need:a.need};
-  lsSet(LS_DISMISSED,DISMISSED);markDirty();build();render();
+  lsSet(LS_DISMISSED,DISMISSED);build();render();
 }
-function undismiss(key){delete DISMISSED[key];lsSet(LS_DISMISSED,DISMISSED);markDirty();build();render()}
-function clearDismissedDone(){Object.keys(DISMISSED).forEach(key=>{const a=CODES.find(c=>c.co+'|'+c.code===key);if(!a||!(a.cls.bought&&!a.stockHeld&&a.need>0))delete DISMISSED[key]});lsSet(LS_DISMISSED,DISMISSED);markDirty();build();render()}
+function undismiss(key){delete DISMISSED[key];lsSet(LS_DISMISSED,DISMISSED);build();render()}
+function clearDismissedDone(){Object.keys(DISMISSED).forEach(key=>{const a=CODES.find(c=>c.co+'|'+c.code===key);if(!a||!(a.cls.bought&&!a.stockHeld&&a.need>0))delete DISMISSED[key]});lsSet(LS_DISMISSED,DISMISSED);build();render()}
 
 /* Back-to-back check */
 function renderB2B(){
@@ -581,7 +579,7 @@ function loadPaste(){
   const p=parseRaw(txt);
   if(!p.stk.length||(!p.so.length&&!p.po.length)){m.textContent=p.bad?`Nothing usable – ${p.bad} rows did not look like SO / PO / STK rows. Copy columns A to AB.`:'Nothing usable – paste all rows, columns A to AB.';m.className='msg bad';return}
   try{localStorage.setItem(LS_RAW,txt);localStorage.setItem(LS_TS,new Date().toISOString())}catch(e){m.textContent='Loaded, but too large to keep in this browser – it will need pasting again next time.';m.className='msg bad'}
-  applyRaw(txt,new Date().toISOString());markDirty();
+  applyRaw(txt,new Date().toISOString());
   m.textContent=`Loaded ${p.so.length} SO lines, ${p.po.length} PO lines, ${p.stk.length} codes${p.bad?` (${p.bad} rows skipped)`:''}.`;m.className='msg ok';
   setTimeout(()=>closeOv('pasteOv'),900);
 }
@@ -593,7 +591,6 @@ function openSettings(){
   document.getElementById('sHoldSO').checked=!!SET.holdSO;
   document.getElementById('sSoon').value=SET.soon;
   document.getElementById('sLead').value=SET.lead;
-  document.getElementById('sRepo').value=GH.repo;document.getElementById('sToken').value=GH.token;
   document.getElementById('setMsg').textContent='';
   document.getElementById('setOv').classList.add('show');
 }
@@ -603,11 +600,7 @@ function saveSettings(){
   SET.holdSO=document.getElementById('sHoldSO').checked;
   SET.soon=Math.max(0,parseInt(document.getElementById('sSoon').value)||0);
   SET.lead=Math.max(0,parseInt(document.getElementById('sLead').value)||0);
-  const repo=document.getElementById('sRepo').value.trim(),token=document.getElementById('sToken').value.trim();
-  const ghChanged=repo!==GH.repo||token!==GH.token;
-  GH.repo=repo;GH.token=token;lsSet(LS_GH,{repo,token});
-  lsSet(LS_SET,SET);markDirty();build();render();
-  if(ghChanged){document.getElementById('setMsg').textContent='Saved – reloading…';setTimeout(()=>location.reload(),500);return}
+  lsSet(LS_SET,SET);build();render();
   document.getElementById('setMsg').textContent='Saved.';document.getElementById('setMsg').className='msg ok';setTimeout(()=>closeOv('setOv'),600);
 }
 
@@ -620,150 +613,47 @@ document.querySelectorAll('.ov').forEach(o=>o.addEventListener('click',e=>{if(e.
 document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.ov.show').forEach(o=>o.classList.remove('show'))});
 
 (function init(){
-  const raw=localStorage.getItem(LS_RAW);
-  if(raw)applyRaw(raw,localStorage.getItem(LS_TS));else render();
-  initTeam();
+  applyMode();
+  if(IS_EDITOR){
+    const raw=localStorage.getItem(LS_RAW);
+    if(raw)applyRaw(raw,localStorage.getItem(LS_TS));else{render();fetchShared()}   // new machine: start from the last publish
+  }else fetchShared();
 })();
 
-/* ── team publish ──────────────────────────────────────────────────────
-   One editor pastes, dismisses and sets things up locally, then presses
-   Publish for team. That writes the paste (gzip + base64), the dismissed
-   list and the settings to a shared store; everyone else gets a read-only
-   view that follows the latest publish. Two stores, chosen at start-up:
-     claude  – inside the claude.ai artifact viewer: its shared db, with
-               the paste in chunks under the 256 KiB document cap.
-     github  – the GitHub Pages copy (or any copy with a repo set in
-               Settings): published.json in the repository, written with
-               the editor's token through the GitHub contents API and read
-               by everyone through the same API (public repo, no token).
-   Opened as a plain file with neither, the app behaves as it always did. */
-function markDirty(){if(!TEAM.mode||TEAM.readOnly)return;TEAM.dirty=true;teamBar()}
-function enterTeamMode(mode,canEdit){
-  TEAM.mode=mode;TEAM.canEdit=canEdit;TEAM.readOnly=!canEdit;
-  if(TEAM.readOnly){document.getElementById('pasteBtn').hidden=true;if(mode==='claude')document.getElementById('setBtn').hidden=true}
-  else document.getElementById('pubBtn').hidden=false;
-  document.getElementById('teamBar').hidden=false;
-  render();teamBar();
+/* ── editor / view-only, the same way as the stock planner and buffer apps ──
+   Open the page with ?edit to get the editor: paste, dismiss, settings and
+   Publish for team. Publish downloads data.json (the paste, the dismissed
+   list and the settings); commit it to the repo replacing the old one and
+   the view-only page picks it up on its next load. Without ?edit the page
+   is read only and shows whatever data.json was last published. */
+function applyMode(){
+  const badge=document.getElementById('modeBadge');
+  if(IS_EDITOR){badge.textContent='EDITOR';badge.style.background='#065f46'}
+  else{document.body.classList.add('viewer-mode');badge.textContent='VIEW ONLY';badge.style.background='#1e40af'}
 }
-function shouldFollow(v){
-  const localV=Number(lsGet(LS_PUBV,0))||0;const haveLocal=!!DATA.stk.length;
-  // viewers always follow the publish; editors only when they have nothing of their own (new machine) or are already on an older published version with no unpublished work
-  return v&&v!==TEAM.loadedVersion&&(TEAM.readOnly||!haveLocal||(localV===0||localV<v)&&!TEAM.dirty);
-}
-async function initTeam(){
-  if(window.claude&&typeof window.claude.use==='function'){
-    let db=null,user=null;
-    try{[db,user]=await Promise.all([window.claude.use('db'),window.claude.use('user')])}catch(e){}
-    if(db){
-      TEAM.db=db;TEAM.user=user;
-      enterTeamMode('claude',user?await user.canEdit():false);
-      db.doc('team/meta').onSnapshot(async snap=>{
-        TEAM.meta=snap.exists?snap.data():null;
-        if(shouldFollow(TEAM.meta?TEAM.meta.version||0:0))await loadPublished();
-        teamBar();
-      },e=>{teamBar('Team data unavailable ('+e.code+')')});
-      return;
-    }
-    if(!GH.repo){const el=document.getElementById('teamBar');el.hidden=false;el.innerHTML='<span class="pill p-grey">Local only</span> Team publishing is not available in this view. Open the POtracker link from claude.ai, or use the GitHub Pages copy.';return}
-  }
-  if(!GH.repo)return;                                   // plain file, nothing configured: local as before
-  enterTeamMode('github',!!GH.token);
-  await ghCheck(true);
-  setInterval(()=>ghCheck(false),120000);                // 304s do not count against GitHub's rate limit
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden)ghCheck(false)});
-}
-/* GitHub store */
-function ghUrl(){return `https://api.github.com/repos/${GH.repo}/contents/published.json`}
-function ghHeaders(extra){const h=Object.assign({'Accept':'application/vnd.github.raw+json','X-GitHub-Api-Version':'2022-11-28'},extra||{});if(GH.token)h.Authorization='Bearer '+GH.token;return h}
-async function ghCheck(first){
-  if(TEAM.busy)return;
-  try{
-    const r=await fetch(ghUrl(),{headers:ghHeaders(GH.etag?{'If-None-Match':GH.etag}:{}),cache:'no-store'});
-    if(r.status===304)return;
-    if(r.status===404){TEAM.meta=null;teamBar();return}
-    if(!r.ok)throw new Error('GitHub '+r.status);
-    GH.etag=r.headers.get('ETag');
-    const j=await r.json();
-    TEAM.meta=j;TEAM.pending=j;
-    if(shouldFollow(j.version||0))await loadPublished();
-    teamBar();
-  }catch(e){teamBar((first?'Could not reach GitHub: ':'')+(e.message||e))}
-}
-async function ghSha(){
-  const r=await fetch(ghUrl(),{headers:ghHeaders({'Accept':'application/vnd.github+json'}),cache:'no-store'});
-  if(r.status===404)return null;
-  if(!r.ok)throw new Error('GitHub '+r.status+(r.status===401||r.status===403?' – check the token in Settings':''));
-  return (await r.json()).sha;
-}
-async function ghWho(){try{const r=await fetch('https://api.github.com/user',{headers:ghHeaders({'Accept':'application/vnd.github+json'})});if(r.ok)return (await r.json()).login||''}catch(e){}return ''}
-/* shared */
-async function loadPublished(){
-  const m=TEAM.meta;if(!m)return;
-  try{
-    let raw='';
-    if(TEAM.mode==='claude'){
-      const parts=[];
-      for(let i=0;i<(m.chunks||0);i++){const c=await TEAM.db.doc('team/data/chunks/c'+i).get();if(!c.exists)throw new Error('chunk '+i+' missing');parts.push(c.data().t||'')}
-      raw=parts.join('');
-    }else raw=m.data||'';
-    if(m.enc==='gzip'){raw=await ungz(raw)}
-    if(m.settings)SET=Object.assign({},DEF_SET,m.settings);
-    DISMISSED=m.dismissed||{};
-    if(!TEAM.readOnly){lsSet(LS_SET,SET);lsSet(LS_DISMISSED,DISMISSED);try{localStorage.setItem(LS_RAW,raw);localStorage.setItem(LS_TS,m.ts||'')}catch(e){}}
-    TEAM.loadedVersion=m.version||0;lsSet(LS_PUBV,TEAM.loadedVersion);TEAM.dirty=false;
-    applyRaw(raw,m.ts||null);
-  }catch(e){teamBar('Could not load the team publish: '+(e.message||e.code||e))}
-}
-async function publishTeam(){
-  if(!TEAM.mode||TEAM.busy)return;
+function publishTeam(){
+  if(!IS_EDITOR){alert('View-only mode.');return}
   const raw=localStorage.getItem(LS_RAW)||'';
-  if(!raw||!DATA.stk.length){teamBar('Paste today\'s data before publishing.');return}
-  const btn=document.getElementById('pubBtn');TEAM.busy=true;btn.disabled=true;btn.textContent='Publishing…';
-  try{
-    let enc='raw',body=raw;
-    if(window.CompressionStream){try{body=await gz(raw);enc='gzip'}catch(e){body=raw;enc='raw'}}
-    const version=Date.now();
-    const meta={version,ts:DATA.ts||new Date().toISOString(),enc,bytes:raw.length,dismissed:DISMISSED,settings:SET,so:DATA.so.length,po:DATA.po.length,stk:DATA.stk.length};
-    if(TEAM.mode==='claude'){
-      const CH=200000,n=Math.ceil(body.length/CH);
-      for(let i=0;i<n;i++)await TEAM.db.doc('team/data/chunks/c'+i).set({t:body.slice(i*CH,(i+1)*CH)});
-      const old=TEAM.meta?TEAM.meta.chunks||0:0;
-      for(let i=n;i<old;i++)await TEAM.db.doc('team/data/chunks/c'+i).delete();
-      meta.by=TEAM.user?await TEAM.user.id():null;meta.chunks=n;
-      await TEAM.db.doc('team/meta').set(meta);
-    }else{
-      meta.byName=await ghWho();meta.data=body;
-      const sha=await ghSha();
-      const put={message:`Publish POtracker data ${new Date().toISOString().slice(0,16).replace('T',' ')}`,content:b64(new TextEncoder().encode(JSON.stringify(meta)))};
-      if(sha)put.sha=sha;
-      const r=await fetch(ghUrl(),{method:'PUT',headers:ghHeaders({'Accept':'application/vnd.github+json','Content-Type':'application/json'}),body:JSON.stringify(put)});
-      if(!r.ok){let d='';try{d=(await r.json()).message||''}catch(e){}throw new Error('GitHub '+r.status+(d?' – '+d:''))}
-      GH.etag=null;TEAM.meta=meta;
+  if(!raw||!DATA.stk.length){alert('Paste today\'s data first.');return}
+  const state={raw,ts:DATA.ts||new Date().toISOString(),dismissed:DISMISSED,settings:SET,so:DATA.so.length,po:DATA.po.length,stk:DATA.stk.length,savedAt:new Date().toISOString()};
+  const blob=new Blob([JSON.stringify(state)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='data.json';document.body.appendChild(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500);
+  alert('data.json downloaded.\n\nNow upload it to the POtracker GitHub repo (replacing the old data.json) and commit. The team will see the update within a minute.');
+}
+function fetchShared(cb){
+  fetch('data.json?t='+Date.now()).then(r=>{if(!r.ok)throw new Error('no data.json');return r.json()}).then(s=>{
+    if(s&&s.raw){
+      if(s.settings)SET=Object.assign({},DEF_SET,s.settings);
+      DISMISSED=s.dismissed||{};
+      if(IS_EDITOR){lsSet(LS_SET,SET);lsSet(LS_DISMISSED,DISMISSED);try{localStorage.setItem(LS_RAW,s.raw);localStorage.setItem(LS_TS,s.ts||'')}catch(e){}}
+      applyRaw(s.raw,s.ts||null);
+      const sa=s.savedAt?new Date(s.savedAt).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+      const bd=document.getElementById('bannerDate');if(bd&&sa)bd.textContent='(published '+sa+')';
     }
-    TEAM.loadedVersion=version;lsSet(LS_PUBV,version);TEAM.dirty=false;
-    teamBar('Published for the team.');
-  }catch(e){teamBar('Publish failed: '+(e.message||e.code||e))}
-  TEAM.busy=false;btn.disabled=false;btn.textContent='Publish for team';
+    if(cb)cb(true);
+  }).catch(()=>{if(cb)cb(false)});
 }
-async function teamBar(msg){
-  const el=document.getElementById('teamBar');if(el.hidden)return;
-  const m=TEAM.meta;let who='';
-  if(m&&m.by&&TEAM.user){try{const ps=await TEAM.user.profiles([m.by]);who=(ps[m.by]&&ps[m.by].name)||''}catch(e){}}
-  if(m&&m.byName)who=m.byName;
-  const when=m&&m.ts?new Date(m.ts):null;
-  const pub=m?`Team view published <b>${when?when.toLocaleDateString('en-GB',{weekday:'short',day:'2-digit',month:'short'})+' '+when.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'–'}</b>${who?' by <b>'+esc(who)+'</b>':''}`:'Nothing published for the team yet.';
-  const newer=m&&(m.version||0)>TEAM.loadedVersion&&!TEAM.readOnly;
-  el.innerHTML=(TEAM.readOnly?'<span class="pill p-blue">Team view</span> ':'<span class="pill p-gold">Editor</span> ')+pub
-    +(TEAM.dirty?' · <span class="pill p-amber">Unpublished changes</span>':'')
-    +(newer?` · <a onclick="loadPublished()">Load the latest publish</a>`:'')
-    +(msg?` · <span>${esc(msg)}</span>`:'')
-    +(TEAM.mode==='github'&&TEAM.readOnly?' · <span class="sm">To publish from this machine, add the GitHub token in Settings.</span>':'');
-  const btn=document.getElementById('pubBtn');btn.classList.toggle('dirty',!!TEAM.dirty);
-}
-async function gz(str){const cs=new CompressionStream('gzip');const w=cs.writable.getWriter();w.write(new TextEncoder().encode(str));w.close();return b64(await new Response(cs.readable).arrayBuffer())}
-async function ungz(b){const ds=new DecompressionStream('gzip');const w=ds.writable.getWriter();w.write(unb64(b));w.close();return await new Response(ds.readable).text()}
-function b64(buf){const u=new Uint8Array(buf);let s='';for(let i=0;i<u.length;i+=0x8000)s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000));return btoa(s)}
-function unb64(s){const bin=atob(s);const u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u}
 </script>
 </body>
 </html>
