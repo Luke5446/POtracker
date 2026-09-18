@@ -5,7 +5,7 @@
    special makes query. Every column name below was confirmed against the
    live schema (INFORMATION_SCHEMA dump, Sep 2026).
 
-   ONE PASTE. Copy columns A to AC, all rows, without the header. Three row
+   ONE PASTE. Copy columns A to AD, all rows, without the header. Three row
    types share one column layout and the app splits them on column A:
 
      SO   one row per live sales order line (product lines only)
@@ -78,6 +78,9 @@
      AC OrderDate       SO/PO: the order's document date - the date the order
                         was raised in Sage (header DocumentDate, yyyy-mm-dd).
                         Shown as "Ordered" on the app's drill-down. STK: blank
+     AD EnteredBy       SO/PO: the Sage user who raised the order (header
+                        UserName - the "User" column on the Sales Order List).
+                        Shown under the order number on the drill-down. STK: blank
 
    MANUFACTURER (T) - the app's made-in-house test is an EXACT match after
    trimming, on this list:
@@ -104,6 +107,12 @@
    already filters on. If the buyer needs the system timestamp instead of
    the document date, swap DocumentDate for DateTimeCreated in the four
    OrderDate lines below - same format, same position.
+
+   ENTERED BY (AD): SOPOrderReturn.UserName / POPOrderReturn.UserName, the
+   Sage login that created the order. This is the "User" column on the Sales
+   Order List. Sage 200 has no separate sales-rep field on the SOP header; if
+   the business records the rep in an analysis code instead, swap UserName
+   for that AnalysisCodeN in the four EnteredBy lines below.
 
    STATUS FILTERS: DocumentTypeID 0 = order (not return). DocumentStatusID:
    0 = live, 1 = on hold, 2 = complete, 4 = seen once (cancelled or disputed).
@@ -176,7 +185,10 @@ SELECT
                                                                 AS Intercompany,
     CAST(sor.DocumentStatusID AS varchar(10))                   AS DocStatusID,
     /* Date the order was raised in Sage - see ORDER DATE above. */
-    ISNULL(CONVERT(varchar(10), sor.DocumentDate, 23),'')       AS OrderDate
+    ISNULL(CONVERT(varchar(10), sor.DocumentDate, 23),'')       AS OrderDate,
+    /* Sage user who raised the order - see ENTERED BY above. */
+    LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(ISNULL(sor.UserName,''),
+        CHAR(9),' '), CHAR(13),' '), CHAR(10),' ')))            AS EnteredBy
 FROM        S200_LIVE.dbo.SOPOrderReturn      sor
 INNER JOIN  S200_LIVE.dbo.SOPOrderReturnLine  sorl ON sorl.SOPOrderReturnID    = sor.SOPOrderReturnID
 LEFT  JOIN  S200_LIVE.dbo.SLCustomerAccount   cust ON cust.SLCustomerAccountID = sor.CustomerID
@@ -218,7 +230,9 @@ SELECT
           WHERE b.SOPOrderReturnID = sor.SOPOrderReturnID) AS varchar(10)),
     CASE WHEN cust.CustomerAccountNumber = 'TIB003' THEN 'Y' ELSE '' END,
     CAST(sor.DocumentStatusID AS varchar(10)),
-    ISNULL(CONVERT(varchar(10), sor.DocumentDate, 23),'')
+    ISNULL(CONVERT(varchar(10), sor.DocumentDate, 23),''),
+    LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(ISNULL(sor.UserName,''),
+        CHAR(9),' '), CHAR(13),' '), CHAR(10),' ')))
 FROM        OliverHarveyLive.dbo.SOPOrderReturn      sor
 INNER JOIN  OliverHarveyLive.dbo.SOPOrderReturnLine  sorl ON sorl.SOPOrderReturnID    = sor.SOPOrderReturnID
 LEFT  JOIN  OliverHarveyLive.dbo.SLCustomerAccount   cust ON cust.SLCustomerAccountID = sor.CustomerID
@@ -269,7 +283,9 @@ SELECT
        supplier account number here the same way as TIB001 below. */
     ''                                                          AS Intercompany,
     CAST(por.DocumentStatusID AS varchar(10))                   AS DocStatusID,
-    ISNULL(CONVERT(varchar(10), por.DocumentDate, 23),'')       AS OrderDate
+    ISNULL(CONVERT(varchar(10), por.DocumentDate, 23),'')       AS OrderDate,
+    LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(ISNULL(por.UserName,''),
+        CHAR(9),' '), CHAR(13),' '), CHAR(10),' ')))            AS EnteredBy
 FROM        S200_LIVE.dbo.POPOrderReturn      por
 INNER JOIN  S200_LIVE.dbo.POPOrderReturnLine  porl ON porl.POPOrderReturnID    = por.POPOrderReturnID
 LEFT  JOIN  S200_LIVE.dbo.PLSupplierAccount   supp ON supp.PLSupplierAccountID = por.SupplierID
@@ -311,7 +327,9 @@ SELECT
     /* OH buying from Tibard. TIB001 = "Tibard Ltd" in OH's purchase ledger. */
     CASE WHEN supp.SupplierAccountNumber = 'TIB001' THEN 'Y' ELSE '' END,
     CAST(por.DocumentStatusID AS varchar(10)),
-    ISNULL(CONVERT(varchar(10), por.DocumentDate, 23),'')
+    ISNULL(CONVERT(varchar(10), por.DocumentDate, 23),''),
+    LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(ISNULL(por.UserName,''),
+        CHAR(9),' '), CHAR(13),' '), CHAR(10),' ')))
 FROM        OliverHarveyLive.dbo.POPOrderReturn      por
 INNER JOIN  OliverHarveyLive.dbo.POPOrderReturnLine  porl ON porl.POPOrderReturnID    = por.POPOrderReturnID
 LEFT  JOIN  OliverHarveyLive.dbo.PLSupplierAccount   supp ON supp.PLSupplierAccountID = por.SupplierID
@@ -472,20 +490,20 @@ allrows AS (
            FulfilMethodID, LinkID, B2BCount, Intercompany,
            '' AS Manufacturer, '' AS StockHeld, '' AS WebsiteOH, '' AS ProductGroup,
            '' AS BOMItemTypeID, '' AS LeadTime, '' AS LeadTimeUnitID,
-           CAST(NULL AS decimal(18,2)) AS MOQ, DocStatusID, OrderDate
+           CAST(NULL AS decimal(18,2)) AS MOQ, DocStatusID, OrderDate, EnteredBy
     FROM   so
     UNION ALL
     SELECT 'PO', Company, RowKey, ProductCode, Description, DocNo, LineSeq,
            AccountNo, AccountName, Reference, DateISO, Qty1, Qty2, Qty3, Qty4,
            FulfilMethodID, LinkID, B2BCount, Intercompany,
-           '', '', '', '', '', '', '', CAST(NULL AS decimal(18,2)), DocStatusID, OrderDate
+           '', '', '', '', '', '', '', CAST(NULL AS decimal(18,2)), DocStatusID, OrderDate, EnteredBy
     FROM   po
     UNION ALL
     SELECT 'STK', Company, RowKey, ProductCode, Description, '' AS DocNo, CAST(NULL AS smallint) AS LineSeq,
            AccountNo, AccountName, Reference, '' AS DateISO, Qty1, Qty2, Qty3, Qty4,
            FulfilMethodID, '' AS LinkID, B2B12m AS B2BCount, '' AS Intercompany,
            Manufacturer, StockHeld, WebsiteOH, ProductGroup,
-           BOMItemTypeID, LeadTime, LeadTimeUnitID, MOQ, '' AS DocStatusID, '' AS OrderDate
+           BOMItemTypeID, LeadTime, LeadTimeUnitID, MOQ, '' AS DocStatusID, '' AS OrderDate, '' AS EnteredBy
     FROM   stk
 )
 
@@ -493,7 +511,7 @@ SELECT  RowType, Company, RowKey, ProductCode, Description, DocNo, LineSeq,
         AccountNo, AccountName, Reference, DateISO, Qty1, Qty2, Qty3, Qty4,
         FulfilMethodID, LinkID, B2BCount, Intercompany,
         Manufacturer, StockHeld, WebsiteOH, ProductGroup,
-        BOMItemTypeID, LeadTime, LeadTimeUnitID, MOQ, DocStatusID, OrderDate
+        BOMItemTypeID, LeadTime, LeadTimeUnitID, MOQ, DocStatusID, OrderDate, EnteredBy
 FROM    allrows
 ORDER BY CASE RowType WHEN 'SO' THEN 1 WHEN 'PO' THEN 2 ELSE 3 END,
          Company, ProductCode, DocNo, LineSeq;
