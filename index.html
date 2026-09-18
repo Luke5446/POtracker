@@ -623,10 +623,10 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelect
 const LS_PUBV='potracker_pubversion';
 function markDirty(){if(!TEAM.db||TEAM.readOnly)return;TEAM.dirty=true;teamBar()}
 async function initTeam(){
-  if(!(window.claude&&typeof window.claude.use==='function'))return;
+  if(!(window.claude&&typeof window.claude.use==='function'))return;   // plain file / GitHub: no team features
   let db=null,user=null;
-  try{[db,user]=await Promise.all([window.claude.use('db'),window.claude.use('user')])}catch(e){return}
-  if(!db)return;
+  try{[db,user]=await Promise.all([window.claude.use('db'),window.claude.use('user')])}catch(e){}
+  if(!db){const el=document.getElementById('teamBar');el.hidden=false;el.innerHTML='<span class="pill p-grey">Local only</span> Team publishing is not available in this view. Open the POtracker link from claude.ai (the artifact viewer), not as a saved file or a standalone tab.';return}
   TEAM.db=db;TEAM.user=user;
   TEAM.canEdit=user?await user.canEdit():false;
   TEAM.readOnly=!TEAM.canEdit;
