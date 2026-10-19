@@ -129,6 +129,7 @@ textarea{width:100%;min-height:150px;font-size:11px;font-family:Consolas,monospa
   <span id="modeBadge" class="mode"></span>
   <button class="btn btn-gold edit-only" id="pasteBtn" onclick="openPaste()">Paste today's data</button>
   <button class="btn btn-green edit-only" id="pubBtn" onclick="publishTeam()">&#128228; Publish for team</button>
+  <button class="btn btn-ghost edit-only" id="pubSetupBtn" onclick="pubSetup()" title="A GitHub token on this PC lets Publish put data.json straight into the repo">&#9881; Set up this PC</button>
   <button class="btn btn-ghost edit-only" id="setBtn" onclick="openSettings()">Settings</button>
 </header>
 
@@ -750,7 +751,7 @@ document.querySelectorAll('.ov').forEach(o=>o.addEventListener('click',e=>{if(e.
 document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.ov.show').forEach(o=>o.classList.remove('show'))});
 
 (function init(){
-  applyMode();
+  applyMode();pubRefreshBtn();
   fetchStockPlan();fetchProductionPlan();
   if(IS_EDITOR){
     const raw=localStorage.getItem(LS_RAW);
@@ -770,15 +771,53 @@ function applyMode(){
   if(IS_EDITOR){badge.textContent='EDITOR';badge.style.background='#065f46'}
   else{document.body.classList.add('viewer-mode');badge.textContent='VIEW ONLY';badge.style.background='#1e40af'}
 }
+/* With a GitHub token on this PC (Set up this PC), Publish puts data.json
+   straight into the repo through the GitHub contents API, the way the stock
+   planner publishes: read the file's sha, put the new one back with it, read
+   again if GitHub refuses a stale sha. Without a token it downloads the file
+   to upload and commit by hand, as before. (Luke, 19 Oct 2026) */
+const PUB_REPO='Luke5446/POtracker', PUB_API='https://api.github.com/repos/'+PUB_REPO+'/contents/data.json', LS_TOKEN='potracker_token';
+function pubToken(){try{return localStorage.getItem(LS_TOKEN)||''}catch(e){return ''}}
+function pubSetup(){
+  if(!IS_EDITOR)return;
+  const cur=pubToken();
+  let t=prompt(cur?'This PC can publish straight to GitHub. Paste a new token to replace it, or clear the box to go back to downloading data.json.':'Paste the GitHub token for publishing (a fine-grained token that can write the '+PUB_REPO+' repo, Contents: read and write).',cur?'(kept)':'');
+  if(t===null)return;
+  t=t.trim();
+  try{if(!t)localStorage.removeItem(LS_TOKEN);else if(t!=='(kept)')localStorage.setItem(LS_TOKEN,t)}catch(e){alert('Could not keep the token in this browser.')}
+  pubRefreshBtn();
+}
+function pubRefreshBtn(){const b=document.getElementById('pubSetupBtn');if(b)b.innerHTML=pubToken()?'&#9881; Token':'&#9881; Set up this PC';const pb=document.getElementById('pubBtn');if(pb)pb.title=pubToken()?'Puts data.json into the repo; the team sees it within a minute':'Downloads data.json to upload to the repo (Set up this PC to publish straight from here)'}
+const pubB64=s=>btoa(unescape(encodeURIComponent(s)));
+function publishDownload(json,why){
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([json],{type:'application/json'}));a.download='data.json';document.body.appendChild(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500);
+  alert((why?why+'\n\n':'')+'data.json downloaded.\n\nNow upload it to the POtracker GitHub repo (replacing the old data.json) and commit. The team will see the update within a minute.');
+}
+let pubBusy=false;
 function publishTeam(){
   if(!IS_EDITOR){alert('View-only mode.');return}
+  if(pubBusy)return;
   const raw=localStorage.getItem(LS_RAW)||'';
   if(!raw||!DATA.stk.length){alert('Paste today\'s data first.');return}
   const state={raw,ts:DATA.ts||new Date().toISOString(),dismissed:DISMISSED,settings:SET,so:DATA.so.length,po:DATA.po.length,stk:DATA.stk.length,savedAt:new Date().toISOString()};
-  const blob=new Blob([JSON.stringify(state)],{type:'application/json'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='data.json';document.body.appendChild(a);a.click();
-  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500);
-  alert('data.json downloaded.\n\nNow upload it to the POtracker GitHub repo (replacing the old data.json) and commit. The team will see the update within a minute.');
+  const json=JSON.stringify(state),tok=pubToken();
+  if(!tok){publishDownload(json,'');return}
+  const pb=document.getElementById('pubBtn'),was=pb.innerHTML;
+  pubBusy=true;pb.innerHTML='&#8987; Publishing&hellip;';
+  const done=(ok,err)=>{pubBusy=false;pb.innerHTML=was;
+    if(ok){pb.innerHTML='&#10003; Published';setTimeout(()=>{pb.innerHTML=was},4000);const bd=document.getElementById('bannerDate');if(bd)bd.textContent='(published '+new Date(state.savedAt).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})+')'}
+    else publishDownload(json,'GitHub did not take the publish ('+err+').')};
+  const headers={'Authorization':'Bearer '+tok,'Accept':'application/vnd.github+json'};
+  const attempt=n=>{
+    fetch(PUB_API+'?t='+Date.now(),{headers,cache:'no-store'})
+      .then(r=>{if(r.status===404)return {sha:null};if(!r.ok)throw new Error('GitHub said '+r.status+(r.status===401?' (token refused)':r.status===403?' (token cannot write this repo)':''));return r.json()})
+      .then(j=>{const body={message:'POtracker data published '+new Date().toISOString().slice(0,16).replace('T',' '),content:pubB64(json)};if(j.sha)body.sha=j.sha;
+        return fetch(PUB_API,{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},headers),body:JSON.stringify(body)})})
+      .then(r=>{if((r.status===409||r.status===422)&&n<3){attempt(n+1);return}if(!r.ok)throw new Error('GitHub refused the save ('+r.status+')');done(true)})
+      .catch(e=>done(false,String(e.message||e)));
+  };
+  attempt(1);
 }
 function fetchShared(cb,localTs){
   fetch('data.json?t='+Date.now()).then(r=>{if(!r.ok)throw new Error('no data.json');return r.json()}).then(s=>{

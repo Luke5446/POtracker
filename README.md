@@ -5,6 +5,29 @@ A single page, `index.html`, served by GitHub Pages. The buyer opens it with
 **Publish for team**; everyone else opens the plain address and sees the last
 published data.
 
+## Publishing
+
+**Publish for team** writes the plan to `data.json` in this repo, which the
+viewers read, in one of two ways:
+
+- **Straight from the page**: the editor's PC holds a GitHub token and
+  Publish puts the file into the repo itself. The team sees it within a
+  minute.
+- **By hand**: with no token on the PC, Publish downloads `data.json` to
+  upload to the repo and commit, as before. Publish falls back to this,
+  saying why, if GitHub refuses the token.
+
+To set up the token once, on the publishing PC: on GitHub, **Settings →
+Developer settings → Personal access tokens → Fine-grained tokens**, either
+generate a new token (name it "Tibard PO tracker", expiry one year) or edit
+the token the stock planner uses and add this repo to it. Under
+**Repository access** tick `POtracker`; under **Permissions → Repository
+permissions** set **Contents: Read and write**. Copy the token (shown once),
+then in the page with `?edit` press **Set up this PC** and paste it. The
+button changes to **Token**; pressing it again with an empty box removes it.
+A token that can write this repo can change anything in it, so keep it to
+the one PC that publishes.
+
 A PC that opens the editor without pasting every day takes the published
 data whenever it is newer than its own paste; **Clear saved data** in
 Settings forgets the PC's paste and reloads the published data.
