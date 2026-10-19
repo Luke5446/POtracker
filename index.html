@@ -196,6 +196,7 @@ textarea{width:100%;min-height:150px;font-size:11px;font-family:Consolas,monospa
     <div class="foot">
       <button class="btn btn-navy" onclick="saveSettings()">Save settings</button>
       <button class="btn btn-line" onclick="closeOv('setOv')">Cancel</button>
+      <button class="btn btn-line" onclick="clearSaved()" title="Forget the data pasted on this PC and reload what was last published for the team">Clear saved data</button>
       <span class="msg" id="setMsg"></span>
     </div>
   </div>
@@ -587,6 +588,12 @@ function loadPaste(){
 }
 function applyRaw(txt,ts){const p=parseRaw(txt);DATA={so:p.so,po:p.po,stk:p.stk,ts};DELAY=null;UI.open={};UI.tile='';build();render()}
 
+function clearSaved(){
+  if(!confirm('Forget the data pasted on this PC and reload the last published data?\n\nYour dismissed list and settings are kept.'))return;
+  try{localStorage.removeItem(LS_RAW);localStorage.removeItem(LS_TS)}catch(e){}
+  DATA={so:[],po:[],stk:[],ts:null};DELAY=null;closeOv('setOv');render();
+  fetchShared(ok=>{if(!ok)alert('Cleared. The published data could not be read just now - paste today\'s data.')});
+}
 function openSettings(){
   document.getElementById('sMade').value=SET.made.join('\n');
   document.getElementById('sGroups').value=SET.groups.join(', ');
@@ -625,6 +632,24 @@ function saveSettings(){
 const SP_URL='https://luke5446.github.io/Tibard-Stock-Planner/data.json';
 let SP={ok:false,err:'',cPOs:[],stock:{},desc:{},nextContDate:'',savedAt:'',at:null};
 let DELAY=null;   // cached lines, rebuilt when the data or the plan changes
+// The production planner's published SOPDemand paste (Tibard-Productionplan/
+// data.json): the same sales order lines, pasted there most mornings. When it
+// is newer than this page's paste the delays tab uses it, so the two agree.
+const PP_URL='https://luke5446.github.io/Tibard-Productionplan/data.json';
+let PP={ok:false,lines:[],pastedAt:''};
+function fetchProductionPlan(){
+  fetch(PP_URL+'?t='+Date.now()).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(s=>{
+    const sd=s&&s.sopDemand;if(!sd||!Array.isArray(sd.lines)||!sd.lines.length)return;
+    PP={ok:true,pastedAt:sd.pastedAt||'',lines:sd.lines.map(l=>({key:l.k||'',co:l.co||'TIBARD',code:String(l.code||'').toUpperCase(),desc:'',doc:String(l.so||''),seq:num(l.seq),acct:l.acct||'',acctName:l.cust||'',ref:l.custOrder||'',
+      date:l.due||'',out:num(l.qty),alloc:0,hold:false,ic:!!l.ic,user:'',added:l.ordered||''}))};
+    DELAY=null;render();
+  }).catch(()=>{});
+}
+// The sales order lines the delays tab works from, and where they came from
+function delaySource(){
+  if(PP.ok&&(!DATA.ts||(PP.pastedAt||'')>DATA.ts))return {lines:PP.lines,from:'pp',at:PP.pastedAt};
+  return {lines:DATA.so,from:'po',at:DATA.ts};
+}
 function fetchStockPlan(cb){
   fetch(SP_URL+'?t='+Date.now()).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(s=>{
     const stock={},desc={};
@@ -643,7 +668,8 @@ function nextWorkDay(d,n){let x=new Date(d);n=n||1;while(n>0){x=addDays(x,1);if(
 function delayLines(){
   if(DELAY)return DELAY;
   const out=[];
-  if(!SP.ok||!DATA.so.length){DELAY=out;return out}
+  const src=delaySource();
+  if(!SP.ok||!src.lines.length){DELAY=out;return out}
   const codes=new Set();SP.cPOs.forEach(c=>c.items.forEach(i=>codes.add(i.code)));
   // the Oliver Harvey order behind an intercompany line: the TIB order's
   // reference carries the OH purchase order number, and the OH PO row links
@@ -651,7 +677,7 @@ function delayLines(){
   const ohPO={};DATA.po.filter(l=>l.co==='OLIVER HARVEY'&&l.link).forEach(l=>{ohPO[l.doc.replace(/^0+/,'')]=l.link});
   const ohOrder=l=>{if(l.co!=='TIBARD'||!/oliver/i.test(l.acctName||''))return '';const m=String(l.ref||'').match(/\d{4,}/g)||[];for(const n of m){const so=ohPO[n.replace(/^0+/,'')];if(so)return so}return ''};
   codes.forEach(code=>{
-    const lines=DATA.so.filter(l=>l.co==='TIBARD'&&l.code===code&&!l.hold&&l.out>0).sort((a,b)=>(a.date||'9999').localeCompare(b.date||'9999')||a.seq-b.seq);
+    const lines=src.lines.filter(l=>l.co==='TIBARD'&&l.code===code&&!l.hold&&l.out>0).sort((a,b)=>(a.date||'9999').localeCompare(b.date||'9999')||a.seq-b.seq);
     if(!lines.length)return;
     let pool=Math.max(0,SP.stock[code]||0);
     const conts=SP.cPOs.map(c=>({ref:c.ref,date:c.date,left:c.items.filter(i=>i.code===code).reduce((x,i)=>x+i.qty,0)})).filter(c=>c.left>0);
@@ -702,7 +728,7 @@ function renderDelays(){
     <div class="tw"><table><thead><tr><th>Status</th><th>Code</th><th>SO</th><th>Customer</th><th>Their order no</th><th class="num">Out</th><th>Covered by</th><th>Container</th><th>Lands</th><th>Promised</th><th>New date</th><th class="num">Days later</th></tr></thead>
     <tbody>${rows.length?rows.map(x=>`<tr><td>${stPill(x)}</td><td><span class="code">${esc(x.code)}</span>${copyBtn(x.code)}<div class="desc">${esc(x.desc)}</div></td><td><span class="code">${esc(x.so)}</span><div class="sm">line ${x.seq}${x.l.user?' · '+esc(x.l.user):''}</div></td><td>${esc(x.cust)}${ohSO(x)}</td><td class="sm">${esc(x.ref)}</td><td class="num">${fmt(x.out)}</td><td class="sm">${esc(x.by)}</td><td>${x.contRef?`<span class="code">${esc(x.contRef)}</span>`:(SP.nextContDate?`<span class="sm">next order ${fd(pd(SP.nextContDate))}</span>`:'–')}</td><td>${x.contDate?fdl(x.contDate):'–'}</td><td>${fdl(x.promised)}</td><td>${x.st==='change'?`<b style="color:var(--red)">${fdl(x.newDate)}</b>`:x.newDate?fdl(x.newDate):'–'}</td><td class="num">${x.days!=null&&x.days>0?x.days:'–'}</td></tr>`).join('')
       :`<tr><td colspan="12"><div class="empty"><b>${SP.ok?(UI.co==='OLIVER HARVEY'?'Shown under Tibard':'Nothing waiting on a container'):'No container data'}</b>${SP.ok?(UI.co==='OLIVER HARVEY'?'Oliver Harvey orders for Tibard stock come through as intercompany Tibard lines: pick Both companies or Tibard.':'Every Tibard sales order line for a code on a live container goes out from stock.'):'The stock planner’s plan could not be read, so nothing can be worked out.'}</div></td></tr>`}</tbody></table></div></div>
-    <div class="legend"><span>Sales orders as pasted into this page${DATA.ts?` (${new Date(DATA.ts).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})})`:''}; stock and containers as the stock planner last published them.</span><span>Only live (not held) Tibard lines with an outstanding quantity are counted.</span></div>`;
+    <div class="legend"><span>${(()=>{const sr=delaySource();const w=sr.at?new Date(sr.at).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'';return sr.from==='pp'?`Sales orders from the production planner\u2019s SOPDemand paste${w?` (${w})`:''}, newer than this page\u2019s paste${DATA.ts?` of ${new Date(DATA.ts).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}`:''}`:`Sales orders as pasted into this page${w?` (${w})`:''}`})()}; stock and containers as the stock planner last published them.</span><span>Only live (not held) Tibard lines with an outstanding quantity are counted.</span></div>`;
 }
 function exportDelays(everything){
   const rows=delayLines().filter(delayVis).filter(x=>everything||x.st==='change');
@@ -725,10 +751,11 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelect
 
 (function init(){
   applyMode();
-  fetchStockPlan();
+  fetchStockPlan();fetchProductionPlan();
   if(IS_EDITOR){
     const raw=localStorage.getItem(LS_RAW);
-    if(raw)applyRaw(raw,localStorage.getItem(LS_TS));else{render();fetchShared()}   // new machine: start from the last publish
+    if(raw)applyRaw(raw,localStorage.getItem(LS_TS));else render();
+    fetchShared(null,raw?localStorage.getItem(LS_TS)||'':'');   // take the published data when it is newer than this PC's paste (a PC that does not paste every day was showing old orders - Luke, 19 Oct 2026)
   }else fetchShared();
 })();
 
@@ -753,8 +780,9 @@ function publishTeam(){
   setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500);
   alert('data.json downloaded.\n\nNow upload it to the POtracker GitHub repo (replacing the old data.json) and commit. The team will see the update within a minute.');
 }
-function fetchShared(cb){
+function fetchShared(cb,localTs){
   fetch('data.json?t='+Date.now()).then(r=>{if(!r.ok)throw new Error('no data.json');return r.json()}).then(s=>{
+    if(s&&s.raw&&localTs&&(s.ts||'')<=localTs){if(cb)cb(true);return}   // this PC's paste is as new or newer: keep it
     if(s&&s.raw){
       if(s.settings)SET=Object.assign({},DEF_SET,s.settings);
       DISMISSED=s.dismissed||{};
