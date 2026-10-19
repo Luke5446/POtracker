@@ -358,7 +358,11 @@ function sortBy(rows,def){
 const SORTS={
   co:{get:a=>a.co+a.code},code:{get:a=>a.code},sup:{get:a=>a.stk.supName||''},mfr:{get:a=>a.stk.mfr||''},
   soOut:{get:a=>a.soOut},free:{get:a=>a.free},poOut:{get:a=>a.poOut},need:{get:a=>a.need},due:{get:a=>a.due?a.due.getTime():null},
-  orderBy:{get:a=>a.orderBy?a.orderBy.getTime():null},lead:{get:a=>a.lead},inStock:{get:a=>a.inStock},hist:{get:a=>a.stk.b2bHist||0}
+  orderBy:{get:a=>a.orderBy?a.orderBy.getTime():null},lead:{get:a=>a.lead},inStock:{get:a=>a.inStock},hist:{get:a=>a.stk.b2bHist||0},
+  // Container delays (one row per sales order)
+  dStatus:{get:o=>({change:0,short:1,ok:2})[o.st]*1e13+(o.newDate?o.newDate.getTime():9e12)},dSo:{get:o=>o.so},
+  dCust:{get:o=>(o.cust||'').toLowerCase()},   // ties keep the status-then-date order the rows arrive in (the sort is stable)
+  dLines:{get:o=>o.lines.length},dPromised:{get:o=>o.promised?o.promised.getTime():null},dNew:{get:o=>o.newDate?o.newDate.getTime():null},dDays:{get:o=>o.days==null?null:o.days}
 };
 function th(label,key,cls){
   const s=UI.sort[UI.tab];const on=s&&s.key===key;
@@ -366,7 +370,7 @@ function th(label,key,cls){
 }
 function setSort(key){
   const cur=UI.sort[UI.tab];
-  UI.sort[UI.tab]={key,get:SORTS[key].get,dir:cur&&cur.key===key?-cur.dir:(['need','soOut','free','poOut','hist','inStock'].includes(key)?-1:1)};
+  UI.sort[UI.tab]={key,get:SORTS[key].get,dir:cur&&cur.key===key?-cur.dir:(['need','soOut','free','poOut','hist','inStock','dLines','dDays'].includes(key)?-1:1)};
   render();
 }
 function urgPill(a){
@@ -743,6 +747,7 @@ function renderDelays(){
     {id:'',v:new Set(all.flatMap(o=>o.codes)).size,l:'Codes affected',cls:'steel'}
   ];
   if(UI.tile==='short')rows=rows.filter(o=>o.nShort>0);else if(UI.tile)rows=rows.filter(o=>o.st===UI.tile);
+  rows=rows.slice();sortBy(rows,{key:'dStatus',get:SORTS.dStatus.get,dir:1});
   document.getElementById('rc').textContent=`${rows.length} order${rows.length===1?'':'s'}`;
   const spWhen=SP.savedAt?new Date(SP.savedAt).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'';
   const conts=SP.cPOs.map(c=>`<b>${esc(c.ref)}</b> ${fd(pd(c.date))}`).join(' · ');
@@ -754,8 +759,8 @@ function renderDelays(){
     <div class="sm" style="margin-top:6px;color:var(--mut)">Lines of this order that go out from stock are not listed: only the ones waiting on a container.</div></div></td></tr>`;
   document.getElementById('view').innerHTML=tiles(t)+`<div class="card"><h2>Container delays <span class="r">Tibard sales orders with a line that cannot go out from the shelf and waits on a container</span>
       <span style="margin-left:auto;display:flex;gap:6px"><button class="btn btn-navy btn-sm" onclick="exportDelays('orders')" ${nChange.length?'':'disabled'} title="One row per order needing a new date, as a CSV for Sage">&#11015; Export date changes</button><button class="btn btn-line btn-sm" onclick="exportDelays('lines')" ${all.length?'':'disabled'} title="Every line waiting on a container, one row per line">Export lines</button></span></h2>
-    <div class="note">${src}<br>Stock on the shelf (Home + Bulk) covers the oldest promised date first, then each container in landing order; the new date is <b>one working day after the container lands</b> (weekends and bank holidays skipped). An order's new date is the latest over its lines that need moving; click the order to see them. An order whose promised date is already on or after that is left alone. A line left over after the last container is not covered at all.${UI.co==='OLIVER HARVEY'?' <b>Oliver Harvey orders for Tibard stock are shown under Tibard</b>, as the intercompany order, with the OH order number beneath it.':''}</div>
-    <div class="tw"><table><thead><tr><th>Status</th><th>SO</th><th>Customer</th><th>Their order no</th><th class="num">Lines</th><th>Codes</th><th>Container</th><th>Promised</th><th>New date</th><th class="num">Days later</th><th></th></tr></thead>
+    <div class="note">${src}<br>Stock on the shelf (Home + Bulk) covers the oldest promised date first, then each container in landing order; the new date is <b>one working day after the container lands</b> (weekends and bank holidays skipped). An order's new date is the latest over its lines that need moving; click the order to see them; click <b>Customer</b> to group one customer's orders together for a single email. An order whose promised date is already on or after that is left alone. A line left over after the last container is not covered at all.${UI.co==='OLIVER HARVEY'?' <b>Oliver Harvey orders for Tibard stock are shown under Tibard</b>, as the intercompany order, with the OH order number beneath it.':''}</div>
+    <div class="tw"><table><thead><tr>${th('Status','dStatus')}${th('SO','dSo')}${th('Customer','dCust')}<th style="cursor:default">Their order no</th>${th('Lines','dLines','num')}<th style="cursor:default">Codes</th><th style="cursor:default">Container</th>${th('Promised','dPromised')}${th('New date','dNew')}${th('Days later','dDays','num')}<th style="cursor:default"></th></tr></thead>
     <tbody>${rows.length?rows.map(o=>`<tr class="row ${UI.open[o.key]?'open':''}" onclick="toggleOpen('${esc(o.key)}')"><td>${stPill(o)}${o.st==='change'&&o.nShort?'<div class="sm" style="color:var(--amber)">+ a line on no container</div>':''}</td><td><span class="code">${esc(o.so)}</span>${copyBtn(o.so)}${o.user?`<div class="sm">${esc(o.user)}</div>`:''}</td><td>${esc(o.cust)}${o.oh?`<div class="sm">OH order ${esc(o.oh.replace(/^0+/,''))}</div>`:''}</td><td class="sm">${esc(o.ref)}</td><td class="num">${o.lines.length}${o.nOk&&o.st!=='ok'?`<div class="sm">${o.nOk} OK</div>`:''}</td><td class="sm">${o.codes.length<=3?o.codes.map(c=>`<span class="code">${esc(c)}</span>`).join('<br>'):`${o.codes.length} codes`}</td><td>${o.conts.length?o.conts.map(c=>`<span class="code">${esc(c)}</span>`).join(', '):'–'}</td><td>${fdl(o.promised)}</td><td>${o.st==='change'?`<b style="color:var(--red)">${fdl(o.newDate)}</b>`:o.newDate?fdl(o.newDate):'–'}</td><td class="num">${o.days!=null&&o.days>0?o.days:'–'}</td><td class="sm">${UI.open[o.key]?'▲':'▼'}</td></tr>${UI.open[o.key]?lineRows(o):''}`).join('')
       :`<tr><td colspan="11"><div class="empty"><b>${SP.ok?(UI.co==='OLIVER HARVEY'?'Shown under Tibard':'Nothing waiting on a container'):'No container data'}</b>${SP.ok?(UI.co==='OLIVER HARVEY'?'Oliver Harvey orders for Tibard stock come through as intercompany Tibard orders: pick Both companies or Tibard.':'Every Tibard sales order line for a code on a live container goes out from stock.'):'The stock planner’s plan could not be read, so nothing can be worked out.'}</div></td></tr>`}</tbody></table></div></div>
     <div class="legend"><span>${(()=>{const sr=delaySource();const w=sr.at?new Date(sr.at).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'';return sr.from==='pp'?`Sales orders from the production planner’s SOPDemand paste${w?` (${w})`:''}, newer than this page’s paste${DATA.ts?` of ${new Date(DATA.ts).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}`:''}`:`Sales orders as pasted into this page${w?` (${w})`:''}`})()}; stock and containers as the stock planner last published them.</span><span>Only live (not held) Tibard lines with an outstanding quantity are counted.</span></div>`;
@@ -766,6 +771,7 @@ function exportDelays(what){
   let head,body,name;
   if(what==='orders'){
     const rows=delayOrders().filter(delayVis).filter(o=>o.st==='change');if(!rows.length)return;
+    sortBy(rows,{key:'dStatus',get:SORTS.dStatus.get,dir:1});   // the order on screen, so a file sorted by customer stays grouped
     head=['Company','SO No','Customer A/C','Customer','Their Order No','OH Order No','Lines To Move','Codes','Containers','Earliest Promised','New Promised Date','Days Later','Lines Not On A Container'];
     body=rows.map(o=>[o.co,o.so,o.acct,o.cust,o.ref,o.oh?o.oh.replace(/^0+/,''):'',o.nChange,o.lines.filter(x=>x.st==='change').map(x=>x.code).join(' '),o.conts.join(' '),o.promised?fdl(o.promised):'',o.newDate?fdl(o.newDate):'',o.days!=null&&o.days>0?o.days:'',o.nShort||''].map(q).join(','));
     name='sage-date-changes-';

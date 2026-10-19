@@ -60,7 +60,10 @@ the date they can go out.
   date once on the order: its new date is the latest over the lines that
   need moving, and a click on the order shows those lines (code, who covers
   it, container, promised and new dates). Lines that go out from stock are
-  not shown.
+  not shown. The Status, SO, Customer, Lines, Promised, New date and Days
+  later headings sort the list (click again to flip); sorting by Customer
+  groups one customer's orders together for a single email, and the export
+  follows the order on screen.
 - **Export date changes** downloads one row per order needing a new date
   (SO number, customer, their order number, lines to move, codes, container,
   earliest promised and new dates); **Export lines** downloads every line
