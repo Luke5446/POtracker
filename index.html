@@ -138,6 +138,7 @@ textarea{width:100%;min-height:150px;font-size:11px;font-family:Consolas,monospa
   <button data-t="covered">Covered<span class="n" id="n-covered">0</span></button>
   <button data-t="held">Stock held<span class="n" id="n-held">0</span></button>
   <button data-t="transfers">Transfers<span class="n" id="n-transfers">0</span></button>
+  <button data-t="delays">Container delays<span class="n" id="n-delays">0</span></button>
   <button data-t="dismissed">Dismissed<span class="n" id="n-dismissed">0</span></button>
   <button data-t="review">Review<span class="n" id="n-review">0</span></button>
 </nav>
@@ -333,11 +334,12 @@ function render(){
   document.getElementById('n-covered').textContent=coveredRows().length;
   document.getElementById('n-held').textContent=heldRows().filter(a=>a.need>0).length;
   document.getElementById('n-transfers').textContent=transferRows().length;
+  document.getElementById('n-delays').textContent=delayLines().filter(x=>x.st==='change').length;
   document.getElementById('n-dismissed').textContent=Object.keys(DISMISSED).length;
   document.getElementById('n-review').textContent=reviewCount();
   const v=document.getElementById('view');
   if(!DATA.so.length&&!DATA.stk.length){v.innerHTML=`<div class="card"><div class="empty"><b>No data yet</b>${TEAM.readOnly?'Nothing has been published for the team yet.':'Refresh the PO_Tracker Excel query, copy columns A to AD, then use <i>Paste today\'s data</i>.'}</div></div>`;document.getElementById('rc').textContent='';return}
-  ({order:renderOrder,b2b:renderB2B,covered:renderCovered,held:renderHeld,transfers:renderTransfers,dismissed:renderDismissed,review:renderReview})[UI.tab]();
+  ({order:renderOrder,b2b:renderB2B,covered:renderCovered,held:renderHeld,transfers:renderTransfers,delays:renderDelays,dismissed:renderDismissed,review:renderReview})[UI.tab]();
   const ts=DATA.ts?new Date(DATA.ts):null;
   document.getElementById('hdrStatus').innerHTML=`Data loaded <b>${ts?ts.toLocaleDateString('en-GB',{weekday:'short',day:'2-digit',month:'short'})+' '+ts.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'–'}</b><br>${DATA.so.length} SO lines · ${DATA.po.length} PO lines · ${DATA.stk.length} codes`;
 }
@@ -583,7 +585,7 @@ function loadPaste(){
   m.textContent=`Loaded ${p.so.length} SO lines, ${p.po.length} PO lines, ${p.stk.length} codes${p.bad?` (${p.bad} rows skipped)`:''}.`;m.className='msg ok';
   setTimeout(()=>closeOv('pasteOv'),900);
 }
-function applyRaw(txt,ts){const p=parseRaw(txt);DATA={so:p.so,po:p.po,stk:p.stk,ts};UI.open={};UI.tile='';build();render()}
+function applyRaw(txt,ts){const p=parseRaw(txt);DATA={so:p.so,po:p.po,stk:p.stk,ts};DELAY=null;UI.open={};UI.tile='';build();render()}
 
 function openSettings(){
   document.getElementById('sMade').value=SET.made.join('\n');
@@ -604,6 +606,115 @@ function saveSettings(){
   document.getElementById('setMsg').textContent='Saved.';document.getElementById('setMsg').className='msg ok';setTimeout(()=>closeOv('setOv'),600);
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Container delays — what will not go out because the container it is
+   waiting on has moved (Luke, 19 Oct 2026).
+   The containers come from the stock planner's published plan
+   (Tibard-Stock-Planner/data.json on GitHub Pages): each live container
+   or air freight with the day it lands at Tibard and what is on it.
+   For every code on a container, the Tibard sales order lines are netted
+   the same way the production planner does it: the stock on the shelf
+   (Home + Bulk, as the stock planner holds it) covers the oldest promised
+   date first, then each container in landing order covers what is left.
+   A line (or the part of it) that waits on a container can go out one
+   working day after the container lands; where that is after the
+   promised date, the line needs its date moving. Lines left over after
+   the last container are shown as not covered, with the next container
+   order date from the stock planner.
+   ═══════════════════════════════════════════════════════════════════════ */
+const SP_URL='https://luke5446.github.io/Tibard-Stock-Planner/data.json';
+let SP={ok:false,err:'',cPOs:[],stock:{},desc:{},nextContDate:'',savedAt:'',at:null};
+let DELAY=null;   // cached lines, rebuilt when the data or the plan changes
+function fetchStockPlan(cb){
+  fetch(SP_URL+'?t='+Date.now()).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(s=>{
+    const stock={},desc={};
+    (s.rows||[]).forEach(r=>{stock[String(r.code||'').toUpperCase()]=num(r.home)+num(r.bulk);desc[String(r.code||'').toUpperCase()]=r.desc||''});
+    SP={ok:true,err:'',cPOs:(s.cPOs||[]).filter(c=>c&&c.date&&Array.isArray(c.items)).map(c=>({ref:c.ref||'',date:c.date,items:c.items.map(i=>({code:String(i.code||'').toUpperCase(),qty:num(i.qty)})).filter(i=>i.code&&i.qty>0)})).sort((a,b)=>a.date.localeCompare(b.date)),
+      stock,desc,nextContDate:s.nextContDate||'',savedAt:s.savedAt||'',at:new Date()};
+    DELAY=null;render();if(cb)cb(true);
+  }).catch(e=>{SP.ok=false;SP.err=e&&e.message?e.message:'could not reach it';SP.at=new Date();DELAY=null;render();if(cb)cb(false)});
+}
+// England & Wales bank holidays, so "one working day after" skips them
+const BANK_HOLS=new Set(['2026-01-01','2026-04-03','2026-04-06','2026-05-04','2026-05-25','2026-08-31','2026-12-25','2026-12-28',
+  '2027-01-01','2027-03-26','2027-03-29','2027-05-03','2027-05-31','2027-08-30','2027-12-27','2027-12-28']);
+const iso=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+const isWorkDay=d=>d.getDay()!==0&&d.getDay()!==6&&!BANK_HOLS.has(iso(d));
+function nextWorkDay(d,n){let x=new Date(d);n=n||1;while(n>0){x=addDays(x,1);if(isWorkDay(x))n--}return x}
+function delayLines(){
+  if(DELAY)return DELAY;
+  const out=[];
+  if(!SP.ok||!DATA.so.length){DELAY=out;return out}
+  const codes=new Set();SP.cPOs.forEach(c=>c.items.forEach(i=>codes.add(i.code)));
+  // the Oliver Harvey order behind an intercompany line: the TIB order's
+  // reference carries the OH purchase order number, and the OH PO row links
+  // back to the OH sales order
+  const ohPO={};DATA.po.filter(l=>l.co==='OLIVER HARVEY'&&l.link).forEach(l=>{ohPO[l.doc.replace(/^0+/,'')]=l.link});
+  const ohOrder=l=>{if(l.co!=='TIBARD'||!/oliver/i.test(l.acctName||''))return '';const m=String(l.ref||'').match(/\d{4,}/g)||[];for(const n of m){const so=ohPO[n.replace(/^0+/,'')];if(so)return so}return ''};
+  codes.forEach(code=>{
+    const lines=DATA.so.filter(l=>l.co==='TIBARD'&&l.code===code&&!l.hold&&l.out>0).sort((a,b)=>(a.date||'9999').localeCompare(b.date||'9999')||a.seq-b.seq);
+    if(!lines.length)return;
+    let pool=Math.max(0,SP.stock[code]||0);
+    const conts=SP.cPOs.map(c=>({ref:c.ref,date:c.date,left:c.items.filter(i=>i.code===code).reduce((x,i)=>x+i.qty,0)})).filter(c=>c.left>0);
+    let ci=0;
+    const desc=(DATA.stk.find(s=>s.co==='TIBARD'&&s.code===code)||{}).name||SP.desc[code]||lines[0].desc||'';
+    lines.forEach(l=>{
+      let need=l.out;const by=[];let fromStock=0,onCont=0,short=0,lastCont=null;
+      if(pool>0){const t=Math.min(pool,need);pool-=t;need-=t;fromStock=t;by.push(t+' from stock')}
+      while(need>0&&ci<conts.length){const c=conts[ci];const t=Math.min(c.left,need);if(t>0){c.left-=t;need-=t;onCont+=t;lastCont=c;by.push(t+' on '+c.ref)}if(c.left<=0)ci++}
+      if(need>0){short=need;by.push(need+' not covered')}
+      if(fromStock===l.out)return;                       // goes out from the shelf: nothing to tell the sales office
+      const promised=pd(l.date);
+      let newDate=null,st,contDate=null,contRef='';
+      if(lastCont){contDate=pd(lastCont.date);contRef=lastCont.ref;newDate=nextWorkDay(contDate,1)}
+      if(short>0)st='short';
+      else if(promised&&newDate&&newDate<=promised)st='ok';
+      else st='change';
+      out.push({code,desc,l,so:l.doc.replace(/^0+/,''),seq:l.seq,cust:l.acctName,acct:l.acct,ref:l.ref,oh:ohOrder(l),out:l.out,fromStock,onCont,short,contRef,contDate,promised,newDate,st,by:by.join(', '),
+        days:promised&&newDate?dayDiff(newDate,promised):null,hay:(code+' '+desc+' '+l.doc+' '+l.acctName+' '+l.ref+' '+contRef).toLowerCase()});
+    });
+  });
+  out.sort((a,b)=>{const o={change:0,short:1,ok:2};return o[a.st]-o[b.st]||((a.newDate?a.newDate.getTime():9e15)-(b.newDate?b.newDate.getTime():9e15))||((a.promised?a.promised.getTime():9e15)-(b.promised?b.promised.getTime():9e15))||a.code.localeCompare(b.code)});
+  DELAY=out;return out;
+}
+function delayVis(x){if(UI.co&&UI.co!=='TIBARD')return false;if(UI.q&&!x.hay.includes(UI.q))return false;return true}
+function renderDelays(){
+  const all=delayLines().filter(delayVis);
+  let rows=all;
+  const nChange=all.filter(x=>x.st==='change'),nShort=all.filter(x=>x.st==='short'),nOk=all.filter(x=>x.st==='ok');
+  const t=[
+    {id:'change',v:nChange.length,l:'Lines needing a new date',cls:'red'},
+    {id:'',v:new Set(nChange.map(x=>x.so)).size,l:'Sales orders to change'},
+    {id:'short',v:nShort.length,l:'Not on any container',cls:'amber'},
+    {id:'ok',v:nOk.length,l:'Waiting on a container, date OK',cls:'green'},
+    {id:'',v:new Set(all.map(x=>x.code)).size,l:'Codes affected',cls:'steel'}
+  ];
+  if(UI.tile)rows=rows.filter(x=>x.st===UI.tile);
+  document.getElementById('rc').textContent=`${rows.length} line${rows.length===1?'':'s'}`;
+  const spWhen=SP.savedAt?new Date(SP.savedAt).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'';
+  const conts=SP.cPOs.map(c=>`<b>${esc(c.ref)}</b> ${fd(pd(c.date))}`).join(' · ');
+  const src=SP.ok?`Containers from the stock planner's published plan${spWhen?` (published ${spWhen})`:''}: ${conts||'none live'}.${SP.nextContDate?` Next container order ${fd(pd(SP.nextContDate))}.`:''}`
+    :SP.at?`<span style="color:var(--red)">Could not read the stock planner's plan (${esc(SP.err)}).</span> <button class="btn btn-line btn-sm" onclick="fetchStockPlan()">Try again</button>`:'Reading the stock planner’s plan…';
+  const stPill=x=>x.st==='change'?`<span class="pill p-red">Move to ${fd(x.newDate)}</span>`:x.st==='short'?'<span class="pill p-amber">Not on a container</span>':'<span class="pill p-green">Date OK</span>';
+  const ohSO=x=>x.oh?`<div class="sm">OH order ${esc(x.oh.replace(/^0+/,''))}</div>`:'';
+  document.getElementById('view').innerHTML=tiles(t)+`<div class="card"><h2>Container delays <span class="r">Tibard sales order lines that cannot go out from the shelf and wait on a container</span>
+      <span style="margin-left:auto;display:flex;gap:6px"><button class="btn btn-navy btn-sm" onclick="exportDelays(false)" ${nChange.length?'':'disabled'} title="The lines needing a new date, as a CSV for Sage">&#11015; Export date changes</button><button class="btn btn-line btn-sm" onclick="exportDelays(true)" ${all.length?'':'disabled'} title="Every line on this tab">Export all</button></span></h2>
+    <div class="note">${src}<br>Stock on the shelf (Home + Bulk) covers the oldest promised date first, then each container in landing order; the new date is <b>one working day after the container lands</b> (weekends and bank holidays skipped). A line whose promised date is already on or after that is left alone. Lines left over after the last container are not covered at all.${UI.co==='OLIVER HARVEY'?' <b>Oliver Harvey orders for Tibard stock are shown under Tibard</b>, as the intercompany line, with the OH order number beneath it.':''}</div>
+    <div class="tw"><table><thead><tr><th>Status</th><th>Code</th><th>SO</th><th>Customer</th><th>Their order no</th><th class="num">Out</th><th>Covered by</th><th>Container</th><th>Lands</th><th>Promised</th><th>New date</th><th class="num">Days later</th></tr></thead>
+    <tbody>${rows.length?rows.map(x=>`<tr><td>${stPill(x)}</td><td><span class="code">${esc(x.code)}</span>${copyBtn(x.code)}<div class="desc">${esc(x.desc)}</div></td><td><span class="code">${esc(x.so)}</span><div class="sm">line ${x.seq}${x.l.user?' · '+esc(x.l.user):''}</div></td><td>${esc(x.cust)}${ohSO(x)}</td><td class="sm">${esc(x.ref)}</td><td class="num">${fmt(x.out)}</td><td class="sm">${esc(x.by)}</td><td>${x.contRef?`<span class="code">${esc(x.contRef)}</span>`:(SP.nextContDate?`<span class="sm">next order ${fd(pd(SP.nextContDate))}</span>`:'–')}</td><td>${x.contDate?fdl(x.contDate):'–'}</td><td>${fdl(x.promised)}</td><td>${x.st==='change'?`<b style="color:var(--red)">${fdl(x.newDate)}</b>`:x.newDate?fdl(x.newDate):'–'}</td><td class="num">${x.days!=null&&x.days>0?x.days:'–'}</td></tr>`).join('')
+      :`<tr><td colspan="12"><div class="empty"><b>${SP.ok?(UI.co==='OLIVER HARVEY'?'Shown under Tibard':'Nothing waiting on a container'):'No container data'}</b>${SP.ok?(UI.co==='OLIVER HARVEY'?'Oliver Harvey orders for Tibard stock come through as intercompany Tibard lines: pick Both companies or Tibard.':'Every Tibard sales order line for a code on a live container goes out from stock.'):'The stock planner’s plan could not be read, so nothing can be worked out.'}</div></td></tr>`}</tbody></table></div></div>
+    <div class="legend"><span>Sales orders as pasted into this page${DATA.ts?` (${new Date(DATA.ts).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})})`:''}; stock and containers as the stock planner last published them.</span><span>Only live (not held) Tibard lines with an outstanding quantity are counted.</span></div>`;
+}
+function exportDelays(everything){
+  const rows=delayLines().filter(delayVis).filter(x=>everything||x.st==='change');
+  if(!rows.length)return;
+  const q=v=>{v=v==null?'':String(v);return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v};
+  const head=['Company','SO No','Line','Stock Code','Description','Customer A/C','Customer','Their Order No','OH Order No','Outstanding','From Stock','On Container','Not Covered','Container','Container Lands','Promised Date','New Promised Date','Days Later','Status'];
+  const body=rows.map(x=>[x.l.co,x.so,x.seq,x.code,x.desc,x.acct,x.cust,x.ref,x.oh?x.oh.replace(/^0+/,''):'',x.out,x.fromStock,x.onCont,x.short,x.contRef,x.contDate?fdl(x.contDate):'',x.promised?fdl(x.promised):'',x.newDate?fdl(x.newDate):'',x.days!=null&&x.days>0?x.days:'',x.st==='change'?'Move date':x.st==='short'?'Not on a container':'Date OK'].map(q).join(','));
+  const csv='﻿'+[head.join(',')].concat(body).join('\r\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));a.download=(everything?'container-delays-':'sage-date-changes-')+iso(new Date())+'.csv';document.body.appendChild(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500);
+}
+
 /* ── wiring ────────────────────────────────────────────────────────────── */
 document.getElementById('tabs').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;UI.tab=b.dataset.t;UI.tile='';render()});
 document.getElementById('coSeg').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;UI.co=b.dataset.co;document.querySelectorAll('#coSeg button').forEach(x=>x.classList.toggle('on',x===b));render()});
@@ -614,6 +725,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelect
 
 (function init(){
   applyMode();
+  fetchStockPlan();
   if(IS_EDITOR){
     const raw=localStorage.getItem(LS_RAW);
     if(raw)applyRaw(raw,localStorage.getItem(LS_TS));else{render();fetchShared()}   // new machine: start from the last publish
