@@ -56,8 +56,14 @@ the date they can go out.
 - Oliver Harvey orders for Tibard stock appear as the intercompany Tibard
   line, with the OH sales order number beneath the customer where Sage links
   them.
-- **Export date changes** downloads the lines needing a new date as a CSV
-  (SO number, line, code, customer, outstanding, container, promised and new
-  dates); **Export all** downloads every line on the tab. Sage 200 has no
+- The tab lists **one row per sales order**, since the sales team change the
+  date once on the order: its new date is the latest over the lines that
+  need moving, and a click on the order shows those lines (code, who covers
+  it, container, promised and new dates). Lines that go out from stock are
+  not shown.
+- **Export date changes** downloads one row per order needing a new date
+  (SO number, customer, their order number, lines to move, codes, container,
+  earliest promised and new dates); **Export lines** downloads every line
+  waiting on a container. Sage 200 has no
   standard import that changes promised dates on existing orders, so the file
   is a worklist for the sales office until one is set up.
