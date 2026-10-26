@@ -13,9 +13,11 @@ viewers read, in one of two ways:
 - **Straight from the page**: the editor's PC holds a GitHub token and
   Publish puts the file into the repo itself. The team sees it within a
   minute.
-- **By hand**: with no token on the PC, Publish downloads `data.json` to
-  upload to the repo and commit, as before. Publish falls back to this,
-  saying why, if GitHub refuses the token.
+- **No token on the PC**: nothing is published. A red **Please add a token
+  to publish** warning appears beside the button until one is set up
+  (26 Oct 2026; before that Publish downloaded `data.json` to upload by
+  hand, which looked like a publish to anyone not expecting it). If GitHub
+  refuses the token, Publish still downloads `data.json` and says why.
 
 To set up the token once, on the publishing PC: on GitHub, **Settings →
 Developer settings → Personal access tokens → Fine-grained tokens**, either

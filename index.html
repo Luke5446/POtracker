@@ -809,20 +809,31 @@ function applyMode(){
 /* With a GitHub token on this PC (Set up this PC), Publish puts data.json
    straight into the repo through the GitHub contents API, the way the stock
    planner publishes: read the file's sha, put the new one back with it, read
-   again if GitHub refuses a stale sha. Without a token it downloads the file
-   to upload and commit by hand, as before. (Luke, 19 Oct 2026) */
+   again if GitHub refuses a stale sha. Without a token nothing is published:
+   a red warning asks for one (26 Oct 2026; before that the file was
+   downloaded to upload and commit by hand). (Luke, 19 Oct 2026) */
 const PUB_REPO='Luke5446/POtracker', PUB_API='https://api.github.com/repos/'+PUB_REPO+'/contents/data.json', LS_TOKEN='potracker_token';
 function pubToken(){try{return localStorage.getItem(LS_TOKEN)||''}catch(e){return ''}}
 function pubSetup(){
   if(!IS_EDITOR)return;
   const cur=pubToken();
-  let t=prompt(cur?'This PC can publish straight to GitHub. Paste a new token to replace it, or clear the box to go back to downloading data.json.':'Paste the GitHub token for publishing (a fine-grained token that can write the '+PUB_REPO+' repo, Contents: read and write).',cur?'(kept)':'');
+  let t=prompt(cur?'This PC can publish straight to GitHub. Paste a new token to replace it, or clear the box to remove it (Publish then stops until a token is added).':'Paste the GitHub token for publishing (a fine-grained token that can write the '+PUB_REPO+' repo, Contents: read and write).',cur?'(kept)':'');
   if(t===null)return;
   t=t.trim();
   try{if(!t)localStorage.removeItem(LS_TOKEN);else if(t!=='(kept)')localStorage.setItem(LS_TOKEN,t)}catch(e){alert('Could not keep the token in this browser.')}
   pubRefreshBtn();
 }
-function pubRefreshBtn(){const b=document.getElementById('pubSetupBtn');if(b)b.innerHTML=pubToken()?'&#9881; Token':'&#9881; Set up this PC';const pb=document.getElementById('pubBtn');if(pb)pb.title=pubToken()?'Puts data.json into the repo; the team sees it within a minute':'Downloads data.json to upload to the repo (Set up this PC to publish straight from here)'}
+function pubRefreshBtn(){const b=document.getElementById('pubSetupBtn');if(b)b.innerHTML=pubToken()?'&#9881; Token':'&#9881; Set up this PC';const pb=document.getElementById('pubBtn');if(pb)pb.title=pubToken()?'Puts data.json into the repo; the team sees it within a minute':'Needs a token: click Set up this PC and paste the publishing token';var w=document.getElementById('pubWarn'); if(w && pubToken()) w.style.display='none'; }
+// 26 Oct 2026: with no token on this PC, Publish no longer downloads
+// data.json (a download looked like a publish to anyone not expecting it).
+// It shows a red warning beside the button instead, until a token is set.
+function pubNoToken(){
+  var w=document.getElementById('pubWarn');
+  if(!w){ w=document.createElement('span'); w.id='pubWarn'; w.style.cssText='color:#fff;background:#dc2626;font-weight:700;font-size:12px;padding:3px 8px;border-radius:6px;cursor:pointer;white-space:nowrap'; w.title='Click Set up this PC and paste the publishing token'; w.onclick=pubSetup;
+    var pb=document.getElementById('pubBtn'); if(pb && pb.parentNode) pb.parentNode.insertBefore(w, pb.nextSibling); else document.body.appendChild(w); }
+  w.innerHTML='&#9888; Please add a token to publish'; w.style.display='';
+}
+
 const pubB64=s=>btoa(unescape(encodeURIComponent(s)));
 function publishDownload(json,why){
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([json],{type:'application/json'}));a.download='data.json';document.body.appendChild(a);a.click();
@@ -837,7 +848,7 @@ function publishTeam(){
   if(!raw||!DATA.stk.length){alert('Paste today\'s data first.');return}
   const state={raw,ts:DATA.ts||new Date().toISOString(),dismissed:DISMISSED,settings:SET,so:DATA.so.length,po:DATA.po.length,stk:DATA.stk.length,savedAt:new Date().toISOString()};
   const json=JSON.stringify(state),tok=pubToken();
-  if(!tok){publishDownload(json,'');return}
+  if(!tok){pubNoToken();return}
   const pb=document.getElementById('pubBtn'),was=pb.innerHTML;
   pubBusy=true;pb.innerHTML='&#8987; Publishing&hellip;';
   const done=(ok,err)=>{pubBusy=false;pb.innerHTML=was;
